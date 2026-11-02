@@ -1,0 +1,22 @@
+{
+  "name": "bar-manager-saas",
+  "private": true,
+  "workspaces": [
+    "apps/api",
+    "apps/web",
+    "packages/contracts"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,green \"npm run dev --workspace @bar/api\" \"npm run dev --workspace @bar/web\"",
+    "build": "npm run build --workspace @bar/contracts && npm run build --workspace @bar/api && npm run build --workspace @bar/web",
+    "db:migrate": "npm run db:migrate --workspace @bar/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true,
+    "argon2@0.41.1": true
+  }
+}

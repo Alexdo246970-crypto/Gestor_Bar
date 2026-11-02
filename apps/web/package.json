@@ -1,0 +1,1 @@
+{"name":"@bar/web","version":"1.0.0","private":true,"scripts":{"dev":"vite --host 0.0.0.0","build":"tsc -b && vite build"},"dependencies":{"@bar/contracts":"*","@vitejs/plugin-react":"^4.3.4","react":"^18.3.1","react-dom":"^18.3.1","vite":"^6.0.5"},"devDependencies":{"@types/react":"^18.3.18","@types/react-dom":"^18.3.5","typescript":"^5.7.3"}}
