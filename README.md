@@ -17,6 +17,8 @@ npm run dev
 
 API: `http://localhost:3000/api`; documentación OpenAPI: `http://localhost:3000/api/docs`; web: `http://localhost:5173`.
 
+Modo demostración sin base de datos (datos en memoria del navegador): `VITE_DEMO_MODE=true npm run dev --workspace @bar/web` y pulsar «Entrar como administrador (demo)».
+
 Crear el primer local y administrador mediante `POST /api/setup` (solo disponible mientras no exista ningún usuario; deshabilitar/eliminar este endpoint antes de exponer el servicio públicamente). El endpoint devuelve las credenciales iniciales una sola vez y exige una contraseña fuerte.
 
 ## Estructura

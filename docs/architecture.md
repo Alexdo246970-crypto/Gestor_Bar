@@ -51,6 +51,10 @@ La lista de compra se genera desde ingredientes cuyo stock está por debajo del 
 
 La interfaz de comanda inicial está en modo MVP: agrupa localmente la selección y la envía al backend al enviar a cocina. Para producción, persistir cambios de línea inmediatamente para recuperación ante pérdida de conexión, y publicar eventos transaccionales de cocina mediante outbox/WebSocket.
 
+## Mesas y cobro
+
+`dining_tables` guarda cada mesa con su zona (Salón, Terraza, Barra…), plazas, forma y posición en una cuadrícula del plano. `orders.table_id` vincula la comanda con su mesa y un índice único parcial garantiza una sola comanda activa (`open`/`sent`) por mesa: al abrir una comanda sobre una mesa ocupada, la API devuelve la existente y las nuevas líneas se suman a ella. El mapa muestra cada mesa como libre, comanda sin enviar, en cocina o con cobro parcial. Los pagos aceptan dos formas: tarjeta (datáfono TPV) y efectivo, guardando efectivo entregado y cambio; se pueden dividir en varios pagos. Al completar el total la comanda pasa a `paid` y la mesa queda libre.
+
 ## Finanzas
 
 `GET /reports/daily` consulta pedidos pagados por fecha de cierre local, pagos por fecha local, facturas de proveedores recibidas y gastos operativos. Devuelve coste neto y bruto por proveedor, IVA de compra marcado como deducible, IVA deducible de gastos, IVA repercutido, estimación de liquidación, consumo de ingredientes, margen bruto, resultado operativo y ejecución de presupuestos. Cada ingrediente guarda formato (por ejemplo, pack de seis briks), cantidad base por paquete y precio neto por paquete. La recepción convierte paquetes a cantidades de inventario y actualiza el coste medio ponderado; los movimientos de venta guardan el coste aplicado. La fecha de negocio respeta `tenants.timezone`. Las líneas conservan precio e IVA históricos aunque cambie el catálogo. La liquidación de IVA es orientativa y debe verificarse con facturas y normativa.
@@ -74,11 +78,16 @@ Cookie de sesión requerida en todos salvo el bootstrap y login. Roles: `admin` 
 | POST | `/api/categories` | Crear categoría |
 | POST / GET | `/api/daily-menus`, `/api/daily-menus?date=YYYY-MM-DD` | Crear/consultar menú fechado |
 | POST | `/api/recipes/:productId` | Reemplazar receta y definir extras permitidos mediante `allowedIngredientIds` |
-| POST | `/api/orders` | Abrir pedido |
+| GET / POST | `/api/tables` | Mapa de mesas con el estado de su comanda activa / crear mesa (admin, manager) |
+| PATCH / DELETE | `/api/tables/:id` | Renombrar, mover en el plano o retirar una mesa (solo sin comanda abierta) |
+| GET | `/api/categories` | Categorías de la carta |
+| GET | `/api/products/admin` | Carta completa para gestión, incluidos productos retirados |
+| DELETE | `/api/products/:id` | Quitar producto de la carta (se desactiva para conservar el histórico) |
+| POST | `/api/orders` | Abrir pedido; con `tableId` lo vincula a la mesa y reutiliza su comanda activa si existe |
 | POST | `/api/orders/:id/lines` | Añadir línea de venta |
 | GET | `/api/products/:id/modifiers` | Consultar ingredientes de receta y opciones disponibles para personalizar |
 | POST | `/api/orders/:id/send` | Enviar comanda a preparación |
-| POST | `/api/orders/:id/payments` | Añadir pago; al completar, cerrar y descontar stock |
+| POST | `/api/orders/:id/payments` | Cobro con `method` `card` (datáfono TPV, referencia opcional) o `cash` (con `cashTendered` calcula el cambio). Admite pagos parciales; al completar, cierra, descuenta stock y libera la mesa |
 | POST | `/api/orders/:id/close` | Confirmar cierre si el importe está pagado |
 | GET / POST | `/api/inventory/ingredients` | Listar/crear ingredientes, formato de paquete, precio neto e IVA habitual |
 | PATCH | `/api/inventory/ingredients/:id` | Editar formato, contenido por paquete, precio y stock mínimo |

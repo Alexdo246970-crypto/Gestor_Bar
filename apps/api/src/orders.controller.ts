@@ -12,15 +12,28 @@ export class OrdersController {
     if (!roles.includes(session.role)) throw new ForbiddenException('Permiso insuficiente');
     return session;
   }
-  @Post() async create(@Req() req: AuthRequest, @Body() b: { channel?: string; tableLabel?: string }) {
+  /** Abre una comanda. Con `tableId` la vincula a la mesa; si la mesa ya tiene una comanda activa, devuelve esa misma. */
+  @Post() async create(@Req() req: AuthRequest, @Body() b: { channel?: string; tableLabel?: string; tableId?: string }) {
     const s = this.role(req, ['admin','manager','waiter','cashier']);
+    if (b?.channel && !['table','counter','delivery'].includes(b.channel)) throw new BadRequestException('Canal no válido');
     return this.db.tenant(req, async c => {
-      const r = await c.query(`INSERT INTO orders(tenant_id,opened_by,channel,table_label) VALUES($1,$2,$3,$4)
-        RETURNING id,order_number "orderNumber",status,opened_at "openedAt"`, [s.tenantId,s.userId,b.channel||'table',b.tableLabel||null]); return r.rows[0];
+      if (b?.tableId) {
+        const table = await c.query('SELECT id,label FROM dining_tables WHERE tenant_id=$1 AND id=$2 AND active FOR UPDATE', [s.tenantId,b.tableId]);
+        if (!table.rows[0]) throw new BadRequestException('Mesa no encontrada');
+        const existing = await c.query(`SELECT id,order_number "orderNumber",status,opened_at "openedAt",table_id "tableId",table_label "tableLabel"
+          FROM orders WHERE tenant_id=$1 AND table_id=$2 AND status IN ('open','sent')`, [s.tenantId,b.tableId]);
+        if (existing.rows[0]) return { ...existing.rows[0], reused: true };
+        const r = await c.query(`INSERT INTO orders(tenant_id,opened_by,channel,table_id,table_label,status) VALUES($1,$2,'table',$3,$4,'open')
+          RETURNING id,order_number "orderNumber",status,opened_at "openedAt",table_id "tableId",table_label "tableLabel"`, [s.tenantId,s.userId,b.tableId,table.rows[0].label]);
+        return { ...r.rows[0], reused: false };
+      }
+      const r = await c.query(`INSERT INTO orders(tenant_id,opened_by,channel,table_label,status) VALUES($1,$2,$3,$4,'open')
+        RETURNING id,order_number "orderNumber",status,opened_at "openedAt",table_id "tableId",table_label "tableLabel"`, [s.tenantId,s.userId,b?.channel||'counter',b?.tableLabel||null]);
+      return { ...r.rows[0], reused: false };
     });
   }
-  @Get('active') async active(@Req() req:AuthRequest){const s=this.role(req,['admin','manager','waiter','cashier']);return this.db.tenant(req,async c=>(await c.query(`SELECT o.id,o.order_number "orderNumber",o.status,o.channel,o.table_label "tableLabel",o.opened_at "openedAt",o.gross_total "grossTotal",count(l.id)::int "lineCount" FROM orders o LEFT JOIN order_lines l ON l.tenant_id=o.tenant_id AND l.order_id=o.id WHERE o.tenant_id=$1 AND o.status IN ('open','sent') GROUP BY o.id ORDER BY o.opened_at`,[s.tenantId])).rows);}
-  @Get(':id') async detail(@Req() req:AuthRequest,@Param('id') id:string){const s=this.role(req,['admin','manager','waiter','cashier']);return this.db.tenant(req,async c=>{const order=await c.query(`SELECT id,order_number "orderNumber",status,channel,table_label "tableLabel",opened_at "openedAt",gross_total "grossTotal" FROM orders WHERE tenant_id=$1 AND id=$2`,[s.tenantId,id]);if(!order.rows[0])throw new BadRequestException('Pedido no encontrado');const lines=await c.query(`SELECT id,product_id "productId",product_name "productName",quantity,line_gross "lineGross" FROM order_lines WHERE tenant_id=$1 AND order_id=$2 ORDER BY id`,[s.tenantId,id]);return{...order.rows[0],lines:lines.rows};});}
+  @Get('active') async active(@Req() req:AuthRequest){const s=this.role(req,['admin','manager','waiter','cashier']);return this.db.tenant(req,async c=>(await c.query(`SELECT o.id,o.order_number "orderNumber",o.status,o.channel,o.table_id "tableId",o.table_label "tableLabel",o.opened_at "openedAt",o.gross_total "grossTotal",count(l.id)::int "lineCount",(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.tenant_id=o.tenant_id AND p.order_id=o.id) "paidTotal" FROM orders o LEFT JOIN order_lines l ON l.tenant_id=o.tenant_id AND l.order_id=o.id WHERE o.tenant_id=$1 AND o.status IN ('open','sent') GROUP BY o.id ORDER BY o.opened_at`,[s.tenantId])).rows);}
+  @Get(':id') async detail(@Req() req:AuthRequest,@Param('id') id:string){const s=this.role(req,['admin','manager','waiter','cashier']);return this.db.tenant(req,async c=>{const order=await c.query(`SELECT id,order_number "orderNumber",status,channel,table_id "tableId",table_label "tableLabel",opened_at "openedAt",gross_total "grossTotal",(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.tenant_id=orders.tenant_id AND p.order_id=orders.id) "paidTotal" FROM orders WHERE tenant_id=$1 AND id=$2`,[s.tenantId,id]);if(!order.rows[0])throw new BadRequestException('Pedido no encontrado');const lines=await c.query(`SELECT id,product_id "productId",product_name "productName",quantity,line_gross "lineGross" FROM order_lines WHERE tenant_id=$1 AND order_id=$2 ORDER BY id`,[s.tenantId,id]);const payments=await c.query(`SELECT id,method,amount,cash_tendered "cashTendered",change_given "changeGiven",card_reference "cardReference",paid_at "paidAt" FROM payments WHERE tenant_id=$1 AND order_id=$2 ORDER BY paid_at`,[s.tenantId,id]);return{...order.rows[0],lines:lines.rows,payments:payments.rows};});}
   @Post(':id/lines') async addLines(@Req() req: AuthRequest, @Param('id') id: string, @Body() b: { productId: string; quantity: number; removeIngredientIds?: string[]; addedIngredients?: {ingredientId:string;quantity:number}[] }) {
     const s = this.role(req, ['admin','manager','waiter']);
     if (!b?.productId || !Number.isFinite(b.quantity) || b.quantity <= 0) throw new BadRequestException('Producto y cantidad positiva requeridos');
@@ -62,18 +75,29 @@ export class OrdersController {
       return {ok:true,orderId:id};
     });
   }
-  @Post(':id/payments') async payment(@Req() req: AuthRequest,@Param('id') id:string,@Body() b:{method:string;amount:number}) {
+  /** Cobro por tarjeta (datáfono TPV) o en efectivo. Admite pagos parciales; al completar el total, cierra la comanda y libera la mesa. */
+  @Post(':id/payments') async payment(@Req() req: AuthRequest,@Param('id') id:string,@Body() b:{method:string;amount:number;cashTendered?:number;cardReference?:string}) {
     const s=this.role(req,['admin','manager','cashier']);
-    if (!['cash','card','other'].includes(b?.method)||!Number.isFinite(b.amount)||b.amount<=0) throw new BadRequestException('Pago inválido');
+    if (!['cash','card'].includes(b?.method)) throw new BadRequestException('Forma de pago no válida: usa tarjeta (TPV) o efectivo');
+    if (!Number.isFinite(b.amount)||b.amount<=0) throw new BadRequestException('Importe no válido');
+    const amount=Math.round(b.amount*100)/100;
+    let tendered:number|null=null,change:number|null=null;
+    if (b.method==='cash') {
+      tendered=b.cashTendered==null?amount:Math.round(Number(b.cashTendered)*100)/100;
+      if (!Number.isFinite(tendered)||tendered+0.001<amount) throw new BadRequestException('El efectivo entregado no cubre el importe');
+      change=Math.round((tendered-amount)*100)/100;
+    }
     return this.db.tenant(req,async c=>{
       const o=await c.query('SELECT * FROM orders WHERE tenant_id=$1 AND id=$2 FOR UPDATE',[s.tenantId,id]);
       if (!o.rows[0]||!['sent','open'].includes(o.rows[0].status)) throw new BadRequestException('Pedido no cobrable');
+      if (Number(o.rows[0].gross_total)<=0) throw new BadRequestException('La comanda no tiene importe que cobrar');
       const paid=await c.query('SELECT coalesce(sum(amount),0) amount FROM payments WHERE tenant_id=$1 AND order_id=$2',[s.tenantId,id]);
-      if (Number(paid.rows[0].amount)+b.amount>Number(o.rows[0].gross_total)+0.001) throw new BadRequestException('El pago supera el total pendiente');
-      await c.query('INSERT INTO payments(tenant_id,order_id,method,amount) VALUES($1,$2,$3,$4)',[s.tenantId,id,b.method,b.amount]);
-      const total=Number(paid.rows[0].amount)+b.amount;
-      if(total+0.001>=Number(o.rows[0].gross_total)) await this.finalize(c,s.tenantId,id,s.userId);
-      return {paid:total,remaining:Math.max(0,Number(o.rows[0].gross_total)-total),closed:total+0.001>=Number(o.rows[0].gross_total)};
+      if (Number(paid.rows[0].amount)+amount>Number(o.rows[0].gross_total)+0.001) throw new BadRequestException('El pago supera el total pendiente');
+      await c.query('INSERT INTO payments(tenant_id,order_id,method,amount,cash_tendered,change_given,card_reference,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+        [s.tenantId,id,b.method,amount,tendered,change,b.method==='card'?(b.cardReference?.trim()||null):null,s.userId]);
+      const total=Number(paid.rows[0].amount)+amount,closed=total+0.001>=Number(o.rows[0].gross_total);
+      if(closed) await this.finalize(c,s.tenantId,id,s.userId);
+      return {paid:total,remaining:Math.max(0,Math.round((Number(o.rows[0].gross_total)-total)*100)/100),closed,change};
     });
   }
   @Post(':id/close') async close(@Req() req:AuthRequest,@Param('id') id:string) {
