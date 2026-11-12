@@ -9,7 +9,8 @@ import { FinanceController } from './finance.controller';
 import { CatalogController } from './catalog.controller';
 import { TablesController } from './tables.controller';
 import { PurchasesController, SuppliersController } from './purchases.controller';
+import { KitchenController } from './kitchen.controller';
 
-@Module({ controllers: [AuthController, CoreController, CatalogController, OrdersController, InventoryController, PurchasesController, SuppliersController, FinanceController, TablesController],
+@Module({ controllers: [AuthController, CoreController, CatalogController, OrdersController, InventoryController, PurchasesController, SuppliersController, FinanceController, TablesController, KitchenController],
   providers: [{ provide: 'PG_POOL', useFactory: () => new Pool({ connectionString: process.env.DATABASE_URL }) }, DbService] })
 export class AppModule {}
