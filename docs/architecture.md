@@ -55,6 +55,23 @@ La interfaz de comanda inicial está en modo MVP: agrupa localmente la selecció
 
 `dining_tables` guarda cada mesa con su zona (Salón, Terraza, Barra…), plazas, forma y posición en una cuadrícula del plano. `orders.table_id` vincula la comanda con su mesa y un índice único parcial garantiza una sola comanda activa (`open`/`sent`) por mesa: al abrir una comanda sobre una mesa ocupada, la API devuelve la existente y las nuevas líneas se suman a ella. El mapa muestra cada mesa como libre, comanda sin enviar, en cocina o con cobro parcial. Los pagos aceptan dos formas: tarjeta (datáfono TPV) y efectivo, guardando efectivo entregado y cambio; se pueden dividir en varios pagos. Al completar el total la comanda pasa a `paid` y la mesa queda libre.
 
+### Referencia única de formas, medidas y capacidad (#15)
+
+Tabla de referencia del plano. Las medidas son centímetros enteros; la capacidad es **recomendada** y se puede sobrescribir con aviso cuando se desvía más de 2 plazas.
+
+| Forma | Medidas admitidas | Capacidad recomendada | Dibujo |
+|---|---|---|---|
+| Redonda | Diámetro 50-200 cm (catálogo 70/90/120/150; precisión 0,5 cm) | 70→3, 90→4, 120→8, 150→10 | Círculo de diámetro `diameter_cm` |
+| Cuadrada | Lado 50-150 cm (catálogo 70/80/90/100/120) | 70→2, 80→4, 90→4, 100→6, 120→8 | Cuadrado de `width_cm = height_cm` |
+| Rectangular | Ancho 80-240 cm, alto 60-120 cm | 60 cm lineales por comensal en los lados largos + 1 por lado corto | Rectángulo `width_cm × height_cm` |
+| Barra | Rectángulo estrecho de 60 cm de alto | 1 por taburete | Rectángulo de un lado |
+
+Regla común: 60 cm lineales por comensal, con margen para sillas. Capacidad mínima 1 y máxima 20. La rotación se trata por separado; no cambia la capacidad.
+
+Escala de dibujo: `px = cm × 2` al 100 %, con zoom del 50-300 % y ajuste al ancho de la sala. Separación mínima entre mesas: 40 cm; un solapamiento se señala visualmente pero no bloquea la edición. Una unión se dibuja como una envolvente única y su capacidad es la suma de las mesas que la forman.
+
+Las issues `#36`, `#37` y `#38` son la configuración/validación de cada forma; `#11`, `#12` y `#13` son el diseño visual; `#42` aplica la escala; `#14` define las uniones. Se mantienen como sub-tareas y se cierran al implementarlas, no se fusionan.
+
 ## Finanzas
 
 `GET /reports/daily` consulta pedidos pagados por fecha de cierre local, pagos por fecha local, facturas de proveedores recibidas y gastos operativos. Devuelve coste neto y bruto por proveedor, IVA de compra marcado como deducible, IVA deducible de gastos, IVA repercutido, estimación de liquidación, consumo de ingredientes, margen bruto, resultado operativo y ejecución de presupuestos. Cada ingrediente guarda formato (por ejemplo, pack de seis briks), cantidad base por paquete y precio neto por paquete. La recepción convierte paquetes a cantidades de inventario y actualiza el coste medio ponderado; los movimientos de venta guardan el coste aplicado. La fecha de negocio respeta `tenants.timezone`. Las líneas conservan precio e IVA históricos aunque cambie el catálogo. La liquidación de IVA es orientativa y debe verificarse con facturas y normativa.
