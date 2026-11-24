@@ -2,7 +2,7 @@ import { BadRequestException, Body, Controller, ForbiddenException, Get, Param, 
 import { ApiTags } from '@nestjs/swagger';
 import { DbService, AuthRequest } from './db.service';
 
-const ASSIGNABLE_ROLES = ['kitchen', 'waiter'];
+const ASSIGNABLE_ROLES = ['kitchen', 'waiter', 'cashier'];
 
 @ApiTags('staff')
 @Controller('staff')
@@ -41,7 +41,9 @@ export class StaffController {
     if (b.expiresAt) {
       expiresAt = new Date(b.expiresAt);
       if (!Number.isFinite(expiresAt.getTime()) || expiresAt <= new Date()) throw new BadRequestException('La fecha de caducidad debe ser futura');
+      if (expiresAt.getTime() - Date.now() > 30 * 24 * 60 * 60 * 1000) throw new BadRequestException('La duración máxima de un perfil temporal es de 30 días');
     }
+    if (role !== 'kitchen' && !expiresAt) throw new BadRequestException('Los perfiles temporales de sala o caja deben tener fecha de caducidad');
     return this.db.tenant(req, async c => {
       const existing = await c.query('SELECT id FROM users WHERE lower(email)=lower($1)', [b.email]);
       if (existing.rows[0]) throw new BadRequestException('Ese email ya está registrado');
@@ -50,6 +52,7 @@ export class StaffController {
         RETURNING id,email,full_name "fullName",expires_at "expiresAt",created_at "createdAt"`,
         [b.email.trim(), await argon2.hash(b.password), b.fullName.trim(), expiresAt]);
       await c.query('INSERT INTO tenant_users(tenant_id,user_id,role) VALUES($1,$2,$3)', [s.tenantId, u.rows[0].id, role]);
+      await c.query(`INSERT INTO staff_account_audit(tenant_id,user_id,actor_id,action,details) VALUES($1,$2,$3,'created',$4)`, [s.tenantId,u.rows[0].id,s.userId,JSON.stringify({role,expiresAt})]);
       return { ...u.rows[0], role, active: true, hasSession: false };
     });
   }
@@ -74,6 +77,7 @@ export class StaffController {
       const r = await c.query(`UPDATE tenant_users SET active=$3 WHERE tenant_id=$1 AND user_id=$2
         RETURNING user_id "userId",role,active`, [s.tenantId, userId, b.active]);
       if (!b.active) await this.revokeSessions(s.tenantId, userId);
+      await c.query(`INSERT INTO staff_account_audit(tenant_id,user_id,actor_id,action,details) VALUES($1,$2,$3,$4,$5)`, [s.tenantId,userId,s.userId,b.active?'reactivated':'revoked',JSON.stringify({role:target.rows[0].role})]);
       return { ...r.rows[0], hasSession: false };
     });
   }
@@ -84,6 +88,7 @@ export class StaffController {
     const member = await this.db.tenant(req, async c => (await c.query('SELECT 1 FROM tenant_users WHERE tenant_id=$1 AND user_id=$2', [s.tenantId, userId])).rowCount);
     if (!member) throw new BadRequestException('Perfil no encontrado');
     const removed = await this.revokeSessions(s.tenantId, userId);
+    await this.db.tenant(req,c=>c.query(`INSERT INTO staff_account_audit(tenant_id,user_id,actor_id,action,details) VALUES($1,$2,$3,'sessions_revoked',$4)`,[s.tenantId,userId,s.userId,JSON.stringify({count:removed})]).then(()=>undefined));
     return { ok: true, revoked: removed };
   }
 
