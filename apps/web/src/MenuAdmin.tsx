@@ -7,6 +7,7 @@ type Editing = { mode: 'new' } | { mode: 'edit'; product: AdminProduct };
 /** Gestión de la carta: añadir, editar, retirar y recuperar productos. */
 export function MenuAdmin({ onChanged }: { onChanged: () => void }) {
   const [products, setProducts] = useState<AdminProduct[]>([]), [categories, setCategories] = useState<Category[]>([]), [search, setSearch] = useState(''), [category, setCategory] = useState('Todas'), [showRemoved, setShowRemoved] = useState(false), [editing, setEditing] = useState<Editing | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [saving, setSaving] = useState(false), [newCategory, setNewCategory] = useState(false), [pvp, setPvp] = useState(''), [vat, setVat] = useState(10);
+  const [menuView,setMenuView]=useState<'products'|'menus'>('products');
 
   async function load() {
     try { const [p, c] = await Promise.all([request<AdminProduct[]>('/products/admin'), request<Category[]>('/categories')]); setProducts(p); setCategories(c); }
@@ -50,8 +51,9 @@ export function MenuAdmin({ onChanged }: { onChanged: () => void }) {
   }
 
   const netPreview = Number(pvp) / (1 + vat / 100);
+  if(menuView==='menus') return <section className="menu-admin"><div className="section-head"><div><h3>Gestión de menús</h3><p>Configura varios menús con precio y fecha de servicio</p></div><button className="secondary" onClick={()=>setMenuView('products')}>Volver a productos</button></div><DailyMenusAdmin/></section>;
   return <section className="menu-admin">
-    <div className="section-head"><div><h3>Gestión de la carta</h3><p>Añade platos y bebidas, cambia precios o quítalos de la venta</p></div><button className="primary" onClick={() => open({ mode: 'new' })}>＋ Nuevo producto</button></div>
+    <div className="section-head"><div><h3>Gestión de la carta</h3><p>Añade platos y bebidas, cambia precios o quítalos de la venta</p><button className="text-button" onClick={()=>setMenuView('menus')}>Gestionar menús del día →</button></div><button className="primary" onClick={() => open({ mode: 'new' })}>＋ Nuevo producto</button></div>
     {error && !editing && <div className="toast" onClick={() => setError('')}>{error} ×</div>}
     {notice && <div className="order-notice" onClick={() => setNotice('')}>✓ {notice}</div>}
     <div className="stock-toolbar"><label className="stock-search"><span>⌕</span><input aria-label="Buscar producto" placeholder="Buscar en la carta…" value={search} onChange={e => setSearch(e.target.value)} /></label>
@@ -90,4 +92,13 @@ export function MenuAdmin({ onChanged }: { onChanged: () => void }) {
       </form>
     </div>}
   </section>;
+}
+
+type DailyMenu = { id:string; date:string; name:string; priceNet:number; vatRate:number; products:{id:string;name:string}[] };
+function DailyMenusAdmin(){
+  const [date,setDate]=useState(new Date().toLocaleDateString('en-CA')),[menus,setMenus]=useState<DailyMenu[]>([]),[products,setProducts]=useState<AdminProduct[]>([]),[selected,setSelected]=useState<string[]>([]),[error,setError]=useState(''),[notice,setNotice]=useState(''),[saving,setSaving]=useState(false);
+  async function load(){try{const [m,p]=await Promise.all([request<DailyMenu[]>(`/daily-menus?date=${date}`),request<AdminProduct[]>('/products/admin')]);setMenus(m);setProducts(p.filter(x=>x.active!==false))}catch(e){setError((e as Error).message)}}
+  useEffect(()=>{void load()},[date]);
+  async function create(e:FormEvent<HTMLFormElement>){e.preventDefault();if(saving)return;setSaving(true);setError('');const form=e.currentTarget;const f=new FormData(form);const gross=Number(f.get('price')),vatRate=Number(f.get('vatRate'));if(!(gross>=0)){setError('Indica un precio válido');setSaving(false);return}try{await request('/daily-menus',{method:'POST',body:JSON.stringify({date,name:String(f.get('name')).trim(),priceNet:Math.round(gross/(1+vatRate/100)*100)/100,vatRate,productIds:selected})});setNotice('Menú añadido para la fecha seleccionada.');setSelected([]);form.reset();await load()}catch(err){setError((err as Error).message)}finally{setSaving(false)}}
+  return <><div className="finance-period"><label>Fecha de servicio<input type="date" value={date} onChange={e=>setDate(e.target.value)}/></label><span>Menús activos para el día seleccionado</span></div>{error&&<p className="error">{error}</p>}{notice&&<div className="order-notice">✓ {notice}</div>}<div className="finance-card">{menus.map(m=><div className="finance-row" key={m.id}><span><strong>{m.name}</strong><small>{m.products.map(p=>p.name).join(' · ')||'Sin productos'}</small></span><strong>{euro(Number(m.priceNet)*(1+Number(m.vatRate)/100))}</strong></div>)}{!menus.length&&<p className="finance-note">No hay menús para esta fecha.</p>}</div><form className="package-modal menu-daily-form" onSubmit={create}><p className="eyebrow">NUEVO MENÚ</p><div className="form-pair"><label>Nombre<input name="name" required placeholder="Menú de temporada"/></label><label>Precio final (€)<input name="price" type="number" min="0" step="0.01" required/></label></div><label>IVA<select name="vatRate" defaultValue="10"><option value="10">10%</option><option value="21">21%</option><option value="4">4%</option><option value="0">0%</option></select></label><p className="modal-description">Productos incluidos</p><div className="modifier-list">{products.map(p=><label className="ingredient-check" key={p.id}><input type="checkbox" checked={selected.includes(p.id)} onChange={e=>setSelected(current=>e.target.checked?[...current,p.id]:current.filter(id=>id!==p.id))}/><span>{p.name}</span><small>{euro(grossPrice(p))}</small></label>)}</div><button className="primary" disabled={saving}>{saving?'Guardando…':'Crear menú'}</button></form></>;
 }

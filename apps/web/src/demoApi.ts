@@ -7,7 +7,8 @@ type DemoLine = { id: string; productId: string; productName: string; quantity: 
 type DemoPayment = { id: string; method: 'cash' | 'card'; amount: number; cashTendered: number | null; changeGiven: number | null; cardReference: string | null; paidAt: string };
 type DemoOrder = { id: string; orderNumber: number; status: 'open' | 'sent' | 'paid'; channel: string; tableId: string | null; tableLabel: string | null; openedAt: string; lines: DemoLine[]; payments: DemoPayment[] };
 type DemoTable = { id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar'; posX: number; posY: number };
-type Store = { products: DemoProduct[]; categories: { id: string; name: string; sortOrder: number }[]; tables: DemoTable[]; orders: DemoOrder[]; nextOrder: number };
+type DemoDailyMenu = {id:string;date:string;name:string;priceNet:number;vatRate:number;products:{id:string;name:string}[]};
+type Store = { products: DemoProduct[]; categories: { id: string; name: string; sortOrder: number }[]; tables: DemoTable[]; orders: DemoOrder[]; dailyMenus:DemoDailyMenu[]; nextOrder: number };
 
 const STORAGE_KEY = 'barraos-demo-v2';
 let seedProducts: DemoProduct[] = [];
@@ -25,14 +26,14 @@ function save() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(store))
 
 function load(): Store {
   if (store) return store;
-  try { const raw = localStorage.getItem(STORAGE_KEY); if (raw) { store = JSON.parse(raw); return store!; } } catch { /* ignorar */ }
+  try { const raw = localStorage.getItem(STORAGE_KEY); if (raw) { store = JSON.parse(raw); store!.dailyMenus ||= []; return store!; } } catch { /* ignorar */ }
   const categoryNames = [...new Set(seedProducts.map(p => String(p.categoryId)))];
   const tables: DemoTable[] = [
     ...[1, 2, 3, 4, 5, 6].map((n, i) => ({ id: `t-salon-${n}`, label: `Mesa ${n}`, zone: 'Salón', seats: n === 5 || n === 6 ? 6 : 4, shape: (n % 3 === 0 ? 'round' : 'square') as DemoTable['shape'], posX: 1 + (i % 3) * 2, posY: 1 + Math.floor(i / 3) * 2 })),
     ...[1, 2, 3, 4].map((n, i) => ({ id: `t-terraza-${n}`, label: `Terraza ${n}`, zone: 'Terraza', seats: 2, shape: 'round' as const, posX: 1 + i * 2, posY: 1 })),
     ...[1, 2, 3].map((n, i) => ({ id: `t-barra-${n}`, label: `Barra ${n}`, zone: 'Barra', seats: 1, shape: 'bar' as const, posX: 1 + i, posY: 1 })),
   ];
-  store = { products: seedProducts.map(p => ({ ...p, categoryName: String(p.categoryId) })), categories: categoryNames.map((name, i) => ({ id: name, name, sortOrder: i })), tables, orders: [], nextOrder: 104 };
+  store = { products: seedProducts.map(p => ({ ...p, categoryName: String(p.categoryId) })), categories: categoryNames.map((name, i) => ({ id: name, name, sortOrder: i })), tables, orders: [], dailyMenus:[], nextOrder: 104 };
   const seeds: [string, 'open' | 'sent', number, [string, number][]][] = [
     ['t-salon-4', 'sent', 38, [['demo-19', 2], ['demo-7', 2]]],
     ['t-salon-2', 'open', 12, [['demo-11', 1], ['demo-1', 2]]],
@@ -59,16 +60,20 @@ function activeFor(tableId: string) { return load().orders.find(o => o.tableId =
 export async function demoRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   await new Promise(r => setTimeout(r, 60));
   const s = load(), method = (init.method || 'GET').toUpperCase(), body = init.body ? JSON.parse(String(init.body)) : {};
-  const [route] = path.split('?'), parts = route.split('/').filter(Boolean);
-  const result = handle(s, method, parts, body);
+  const [route,queryString=''] = path.split('?'), parts = route.split('/').filter(Boolean);
+  const result = handle(s, method, parts, body, new URLSearchParams(queryString));
   save();
   return JSON.parse(JSON.stringify(result)) as T;
 }
 
-function handle(s: Store, method: string, parts: string[], b: any): unknown {
+function handle(s: Store, method: string, parts: string[], b: any, query:URLSearchParams): unknown {
   const [root, id, action] = parts;
   // ---- Carta ----
   if (root === 'menu' && method === 'GET') return s.products.filter(p => p.active !== false);
+  if (root === 'daily-menus') {
+    if(method==='GET'){const date=query.get('date')||new Date().toLocaleDateString('en-CA');return s.dailyMenus.filter(m=>m.date===date)}
+    if(method==='POST'){if(!b.name||!b.date||!Number.isFinite(b.priceNet)||!Number.isFinite(b.vatRate))fail('Nombre, fecha y precio válidos requeridos');const items=(b.productIds||[]).map((id:string)=>{const p=s.products.find(x=>x.id===id);if(!p)fail('Producto de menú no disponible');return{id:p.id,name:p.name}});const menu={id:uid('daily-menu'),date:b.date,name:String(b.name).trim(),priceNet:b.priceNet,vatRate:b.vatRate,products:items};s.dailyMenus.push(menu);return{id:menu.id}}
+  }
   if (root === 'categories' && method === 'GET') return s.categories;
   if (root === 'categories' && method === 'POST') {
     const name = String(b.name || '').trim() || fail('Nombre requerido');
