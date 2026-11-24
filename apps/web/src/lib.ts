@@ -15,7 +15,7 @@ export type OrderDetail = {
   payments?: { id: string; method: 'cash' | 'card'; amount: number; cashTendered?: number | null; changeGiven?: number | null; cardReference?: string | null; paidAt: string }[];
 };
 export type Category = { id: string; name: string; sortOrder?: number };
-export type AdminProduct = Product & { description?: string | null; categoryName?: string | null };
+export type AdminProduct = Product & { description?: string | null; categoryName?: string | null; availableFrom?: string | null; availableTo?: string | null };
 
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (DEMO) return demoRequest<T>(path, init);

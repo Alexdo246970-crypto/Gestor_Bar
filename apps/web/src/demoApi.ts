@@ -68,7 +68,7 @@ export async function demoRequest<T>(path: string, init: RequestInit = {}): Prom
 function handle(s: Store, method: string, parts: string[], b: any): unknown {
   const [root, id, action] = parts;
   // ---- Carta ----
-  if (root === 'menu' && method === 'GET') return s.products.filter(p => p.active !== false);
+  if (root === 'menu' && method === 'GET') { const today=new Date().toLocaleDateString('en-CA'); return s.products.filter(p => p.active !== false && (!p.availableFrom||String(p.availableFrom).slice(0,10)<=today) && (!p.availableTo||String(p.availableTo).slice(0,10)>=today)); }
   if (root === 'categories' && method === 'GET') return s.categories;
   if (root === 'categories' && method === 'POST') {
     const name = String(b.name || '').trim() || fail('Nombre requerido');
@@ -81,7 +81,7 @@ function handle(s: Store, method: string, parts: string[], b: any): unknown {
     if (!id && method === 'POST') {
       if (!b.name?.trim() || !Number.isFinite(b.priceNet) || !Number.isFinite(b.vatRate)) fail('Nombre, precio neto e IVA son obligatorios');
       const cat = s.categories.find(c => c.id === b.categoryId);
-      const p: DemoProduct = { id: uid('prod'), name: b.name.trim(), description: b.description || null, categoryId: cat?.id ?? null, categoryName: cat?.name ?? null, priceNet: b.priceNet, vatRate: b.vatRate, active: true };
+      const p: DemoProduct = { id: uid('prod'), name: b.name.trim(), description: b.description || null, categoryId: cat?.id ?? null, categoryName: cat?.name ?? null, priceNet: b.priceNet, vatRate: b.vatRate, active: true, availableFrom:b.availableFrom||null, availableTo:b.availableTo||null };
       s.products.push(p); return p;
     }
     const p = s.products.find(x => x.id === id) ?? fail('Producto inexistente');
@@ -90,6 +90,8 @@ function handle(s: Store, method: string, parts: string[], b: any): unknown {
       if (b.description !== undefined) p.description = b.description;
       if (b.priceNet !== undefined) p.priceNet = b.priceNet;
       if (b.vatRate !== undefined) p.vatRate = b.vatRate;
+      if (b.availableFrom !== undefined) p.availableFrom = b.availableFrom;
+      if (b.availableTo !== undefined) p.availableTo = b.availableTo;
       if (b.active !== undefined) p.active = b.active;
       if (b.categoryId) { const cat = s.categories.find(c => c.id === b.categoryId); p.categoryId = cat?.id ?? p.categoryId; p.categoryName = cat?.name ?? p.categoryName; }
       return p;

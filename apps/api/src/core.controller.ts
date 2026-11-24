@@ -23,7 +23,7 @@ export class CoreController {
   }
   @Get('menu') async menu(@Req() req: AuthRequest) {
     try { return await this.db.tenant(req, async c => (await c.query(`SELECT p.id,p.name,p.description,p.category_id "categoryId",p.price_net "priceNet",p.vat_rate "vatRate",c.name "categoryName"
-      FROM products p LEFT JOIN categories c ON c.tenant_id=p.tenant_id AND c.id=p.category_id WHERE p.active ORDER BY c.sort_order,p.name`)).rows); }
+      FROM products p LEFT JOIN categories c ON c.tenant_id=p.tenant_id AND c.id=p.category_id WHERE p.active AND (p.available_from IS NULL OR p.available_from<=current_date) AND (p.available_to IS NULL OR p.available_to>=current_date) ORDER BY c.sort_order,p.name`)).rows); }
     catch (e) { if ((e as Error).message === 'AUTH_REQUIRED') throw new UnauthorizedException(); throw e; }
   }
   @Post('products') async createProduct(@Req() req: AuthRequest, @Body() b: any) {
@@ -31,9 +31,10 @@ export class CoreController {
     if (!['admin','manager'].includes(req.session.app.role)) throw new ForbiddenException();
     if (!b?.name || !Number.isFinite(b.priceNet) || !Number.isFinite(b.vatRate)) throw new BadRequestException('Nombre, precio neto e IVA son obligatorios');
     return this.db.tenant(req, async c => {
-      const result = await c.query(`INSERT INTO products(tenant_id,category_id,name,description,price_net,vat_rate)
-        VALUES($1,$2,$3,$4,$5,$6) RETURNING id,name,category_id "categoryId",price_net "priceNet",vat_rate "vatRate"`,
-        [req.session.app!.tenantId,b.categoryId||null,b.name,b.description||null,b.priceNet,b.vatRate]); return result.rows[0];
+      if (b.availableFrom && b.availableTo && b.availableFrom > b.availableTo) throw new BadRequestException('La fecha de fin debe ser posterior al inicio');
+      const result = await c.query(`INSERT INTO products(tenant_id,category_id,name,description,price_net,vat_rate,available_from,available_to)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,name,category_id "categoryId",price_net "priceNet",vat_rate "vatRate"`,
+        [req.session.app!.tenantId,b.categoryId||null,b.name,b.description||null,b.priceNet,b.vatRate,b.availableFrom||null,b.availableTo||null]); return result.rows[0];
     });
   }
 }

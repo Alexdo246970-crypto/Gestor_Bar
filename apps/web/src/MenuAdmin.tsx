@@ -6,7 +6,7 @@ type Editing = { mode: 'new' } | { mode: 'edit'; product: AdminProduct };
 
 /** Gestión de la carta: añadir, editar, retirar y recuperar productos. */
 export function MenuAdmin({ onChanged }: { onChanged: () => void }) {
-  const [products, setProducts] = useState<AdminProduct[]>([]), [categories, setCategories] = useState<Category[]>([]), [search, setSearch] = useState(''), [category, setCategory] = useState('Todas'), [showRemoved, setShowRemoved] = useState(false), [editing, setEditing] = useState<Editing | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [saving, setSaving] = useState(false), [newCategory, setNewCategory] = useState(false), [pvp, setPvp] = useState(''), [vat, setVat] = useState(10);
+  const [products, setProducts] = useState<AdminProduct[]>([]), [categories, setCategories] = useState<Category[]>([]), [search, setSearch] = useState(''), [category, setCategory] = useState('Todas'), [showRemoved, setShowRemoved] = useState(false), [editing, setEditing] = useState<Editing | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [saving, setSaving] = useState(false), [newCategory, setNewCategory] = useState(false), [pvp, setPvp] = useState(''), [vat, setVat] = useState(10), [availableFrom,setAvailableFrom]=useState(''), [availableTo,setAvailableTo]=useState('');
 
   async function load() {
     try { const [p, c] = await Promise.all([request<AdminProduct[]>('/products/admin'), request<Category[]>('/categories')]); setProducts(p); setCategories(c); }
@@ -21,7 +21,7 @@ export function MenuAdmin({ onChanged }: { onChanged: () => void }) {
 
   function open(target: Editing) {
     setEditing(target); setNewCategory(false); setError('');
-    if (target.mode === 'edit') { setPvp(grossPrice(target.product).toFixed(2)); setVat(Number(target.product.vatRate)); } else { setPvp(''); setVat(10); }
+    if (target.mode === 'edit') { setPvp(grossPrice(target.product).toFixed(2)); setVat(Number(target.product.vatRate)); setAvailableFrom(target.product.availableFrom?.slice(0,10)||''); setAvailableTo(target.product.availableTo?.slice(0,10)||''); } else { setPvp(''); setVat(10); setAvailableFrom(''); setAvailableTo(''); }
   }
 
   async function save(e: FormEvent<HTMLFormElement>) {
@@ -32,7 +32,8 @@ export function MenuAdmin({ onChanged }: { onChanged: () => void }) {
     try {
       let categoryId = String(f.get('categoryId') || '') || null;
       if (newCategory) { const name = String(f.get('newCategory') || '').trim(); if (!name) throw new Error('Escribe el nombre de la nueva categoría'); categoryId = (await request<Category>('/categories', { method: 'POST', body: JSON.stringify({ name, sortOrder: categories.length }) })).id; }
-      const payload = { name: String(f.get('name')).trim(), description: String(f.get('description') || '').trim() || null, categoryId, vatRate: vat, priceNet: Math.round(price / (1 + vat / 100) * 10000) / 10000 };
+      if (availableFrom && availableTo && availableFrom > availableTo) throw new Error('La fecha de fin debe ser posterior al inicio');
+      const payload = { name: String(f.get('name')).trim(), description: String(f.get('description') || '').trim() || null, categoryId, vatRate: vat, priceNet: Math.round(price / (1 + vat / 100) * 10000) / 10000, availableFrom: availableFrom || null, availableTo: availableTo || null };
       if (editing.mode === 'new') await request('/products', { method: 'POST', body: JSON.stringify(payload) });
       else await request(`/products/${editing.product.id}`, { method: 'PATCH', body: JSON.stringify(payload) });
       setNotice(editing.mode === 'new' ? `«${payload.name}» añadido a la carta.` : `«${payload.name}» actualizado.`);
@@ -83,6 +84,8 @@ export function MenuAdmin({ onChanged }: { onChanged: () => void }) {
           <label>Precio de venta (€, IVA incl.)<input type="number" min="0" step="0.01" required value={pvp} onChange={e => setPvp(e.target.value)} /></label>
           <label>IVA<select value={vat} onChange={e => setVat(Number(e.target.value))}>{VAT_OPTIONS.map(v => <option key={v} value={v}>{v}%</option>)}</select></label>
         </div>
+        <p className="eyebrow">DISPONIBILIDAD DE TEMPORADA (OPCIONAL)</p>
+        <div className="form-pair"><label>Disponible desde<input type="date" value={availableFrom} onChange={e=>setAvailableFrom(e.target.value)}/></label><label>Disponible hasta<input type="date" value={availableTo} onChange={e=>setAvailableTo(e.target.value)}/></label></div>
         {pvp !== '' && Number.isFinite(netPreview) && <p className="modal-description">Base imponible {euro(netPreview)} + IVA {euro(Number(pvp) - netPreview)}</p>}
         {editing.mode === 'edit' && <p className="modal-description">El nuevo precio se aplica a las comandas nuevas; las ya enviadas conservan su precio.</p>}
         {error && <p className="error">{error}</p>}
