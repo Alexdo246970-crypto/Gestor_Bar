@@ -6,7 +6,8 @@ type DemoProduct = Product & { description?: string | null; categoryName?: strin
 type DemoLine = { id: string; productId: string; productName: string; quantity: number; lineGross: number };
 type DemoPayment = { id: string; method: 'cash' | 'card'; amount: number; cashTendered: number | null; changeGiven: number | null; cardReference: string | null; paidAt: string };
 type DemoOrder = { id: string; orderNumber: number; status: 'open' | 'sent' | 'paid'; channel: string; tableId: string | null; tableLabel: string | null; openedAt: string; lines: DemoLine[]; payments: DemoPayment[] };
-type DemoTable = { id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar'; posX: number; posY: number };
+type DemoTable = { id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar' | 'rect'; posX: number; posY: number;
+  diameterCm?: number; widthCm?: number; heightCm?: number; sidesUsed?: string[]; seatsRecommended?: number; seatsWarning?: boolean };
 type Store = { products: DemoProduct[]; categories: { id: string; name: string; sortOrder: number }[]; tables: DemoTable[]; orders: DemoOrder[]; nextOrder: number };
 
 const STORAGE_KEY = 'barraos-demo-v2';
@@ -102,13 +103,13 @@ function handle(s: Store, method: string, parts: string[], b: any): unknown {
     const checkLabel = (label: string, self?: string) => { if (s.tables.some(t => t.id !== self && t.label.toLocaleLowerCase('es') === label.toLocaleLowerCase('es'))) fail('Ya existe una mesa con ese nombre'); };
     if (!id && method === 'POST') {
       const label = String(b.label || '').trim() || fail('El nombre de la mesa es obligatorio'); checkLabel(label);
-      const t: DemoTable = { id: uid('table'), label, zone: b.zone?.trim() || 'Salón', seats: b.seats ?? 4, shape: b.shape ?? 'square', posX: b.posX ?? 0, posY: b.posY ?? 0 };
+      const t: DemoTable = { id: uid('table'), label, zone: b.zone?.trim() || 'Salón', seats: b.seats ?? 4, shape: b.shape ?? 'square', posX: b.posX ?? 0, posY: b.posY ?? 0, diameterCm: b.diameterCm, widthCm: b.widthCm, heightCm: b.heightCm, sidesUsed: b.sidesUsed, seatsRecommended: b.seats ?? 4 };
       s.tables.push(t); return t;
     }
     const t = s.tables.find(x => x.id === id) ?? fail('Mesa no encontrada');
     if (method === 'PATCH') {
       if (b.label !== undefined) { const label = String(b.label).trim() || fail('El nombre de la mesa no puede estar vacío'); checkLabel(label, t.id); t.label = label; const o = activeFor(t.id); if (o) o.tableLabel = label; }
-      for (const k of ['zone', 'seats', 'shape', 'posX', 'posY'] as const) if (b[k] !== undefined) (t as any)[k] = b[k];
+      for (const k of ['zone', 'seats', 'shape', 'posX', 'posY', 'diameterCm', 'widthCm', 'heightCm', 'sidesUsed'] as const) if (b[k] !== undefined) (t as any)[k] = b[k];
       return t;
     }
     if (method === 'DELETE') { if (activeFor(t.id)) fail('La mesa tiene una comanda abierta; cóbrala antes de eliminarla'); s.tables = s.tables.filter(x => x !== t); return { ok: true }; }

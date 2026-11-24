@@ -12,10 +12,35 @@ export function tableState(t: DiningTable): TableState {
   return t.activeOrder.status === 'sent' ? 'sent' : 'open';
 }
 const minutesSince = (iso: string) => Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+const CM_PER_CELL = 40, PX_PER_CM = 2;
+const cellsX = (t: DiningTable) => Math.max(1, Math.round((t.widthCm ?? 80) / CM_PER_CELL));
+const cellsY = (t: DiningTable) => Math.max(1, Math.round((t.heightCm ?? 80) / CM_PER_CELL));
+
+/** Convierte los campos de medidas del formulario al formato que espera la API. */
+function measurePayload(f: FormData, shape: string) {
+  const n = (key: string) => f.get(key) === null ? undefined : Number(f.get(key));
+  if (shape === 'round') return { diameterCm: n('diameterCm') };
+  if (shape === 'square') return { widthCm: n('widthCm') };
+  if (shape === 'rect') return { widthCm: n('widthCm'), heightCm: n('heightCm'), sidesUsed: f.getAll('sidesUsed') as string[] };
+  return {};
+}
+function MeasureFields({ table }: { table?: DiningTable }) {
+  return <>
+    <div className="form-pair">
+      <label>Diámetro (redonda, cm)<input name="diameterCm" type="number" min="50" max="200" step="0.5" defaultValue={table?.diameterCm ?? 90} /></label>
+      <label>Lado / ancho (cm)<input name="widthCm" type="number" min="50" max="240" step="1" defaultValue={table?.widthCm ?? 80} /></label>
+    </div>
+    <label>Alto (rectangular, cm)<input name="heightCm" type="number" min="60" max="150" step="1" defaultValue={table?.heightCm ?? 80} /></label>
+    <fieldset className="sides-field"><legend>Lados usados (rectangular)</legend>
+      {['long1','long2','short1','short2'].map(side => <label key={side}><input type="checkbox" name="sidesUsed" value={side} defaultChecked={(table?.sidesUsed ?? ['long1','long2']).includes(side)} /> {side}</label>)}
+    </fieldset>
+    <p className="finance-note">Capacidad recomendada: {table?.seatsRecommended ?? '—'}{table?.seatsWarning ? ' · la elegida se sale del margen' : ''}</p>
+  </>;
+}
 
 /** Plano de sala: cada mesa muestra en tiempo real el estado de su comanda. */
 export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenInPos: (table: { id: string; label: string }) => void }) {
-  const [tables, setTables] = useState<DiningTable[]>([]), [zone, setZone] = useState(''), [selectedId, setSelectedId] = useState<string | null>(null), [detail, setDetail] = useState<OrderDetail | null>(null), [editMode, setEditMode] = useState(false), [paying, setPaying] = useState<string | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [draft, setDraft] = useState<{ posX: number; posY: number } | null>(null), [dragId, setDragId] = useState<string | null>(null), [pendingZone, setPendingZone] = useState<string | null>(null);
+  const [tables, setTables] = useState<DiningTable[]>([]), [zone, setZone] = useState(''), [selectedId, setSelectedId] = useState<string | null>(null), [detail, setDetail] = useState<OrderDetail | null>(null), [editMode, setEditMode] = useState(false), [paying, setPaying] = useState<string | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [draft, setDraft] = useState<{ posX: number; posY: number } | null>(null), [dragId, setDragId] = useState<string | null>(null), [pendingZone, setPendingZone] = useState<string | null>(null), [zoom, setZoom] = useState(1);
 
   async function load() { try { setTables(await request<DiningTable[]>('/tables')); } catch (e) { setError((e as Error).message); } }
   useEffect(() => { void load(); const timer = setInterval(() => void load(), 15000); return () => clearInterval(timer); }, []);
@@ -33,7 +58,7 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
   }, [selectedId, selected?.activeOrder?.id, selected?.activeOrder?.grossTotal, selected?.activeOrder?.paidTotal]);
 
   async function move(id: string, posX: number, posY: number) {
-    if (tables.some(t => t.zone === currentZone && t.posX === posX && t.posY === posY)) return;
+    if (zoneTables.some(t => t.id !== id && t.posX < posX + cellsX(t) && posX < t.posX + cellsX(t) && t.posY < posY + cellsY(t) && posY < t.posY + cellsY(t))) return;
     setTables(current => current.map(t => t.id === id ? { ...t, posX, posY } : t));
     try { await request(`/tables/${id}`, { method: 'PATCH', body: JSON.stringify({ posX, posY }) }); } catch (e) { setError((e as Error).message); void load(); }
   }
@@ -45,28 +70,31 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
   async function createTable(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); const f = new FormData(e.currentTarget);
     try {
-      const created = await request<DiningTable>('/tables', { method: 'POST', body: JSON.stringify({ label: String(f.get('label')), seats: Number(f.get('seats')), shape: String(f.get('shape')), zone: String(f.get('zone') || currentZone), posX: draft?.posX ?? 0, posY: draft?.posY ?? 0 }) });
+      const created = await request<DiningTable>('/tables', { method: 'POST', body: JSON.stringify({ label: String(f.get('label')), seats: Number(f.get('seats')), shape: String(f.get('shape')), zone: String(f.get('zone') || currentZone), posX: draft?.posX ?? 0, posY: draft?.posY ?? 0, ...measurePayload(f, String(f.get('shape'))) }) });
       setDraft(null); await load(); setZone(created.zone); setSelectedId(created.id); setNotice(`${created.label} añadida al plano.`);
     } catch (err) { setError((err as Error).message); }
   }
   async function saveTable(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); if (!selected) return; const f = new FormData(e.currentTarget);
-    try { await request(`/tables/${selected.id}`, { method: 'PATCH', body: JSON.stringify({ label: String(f.get('label')), seats: Number(f.get('seats')), shape: String(f.get('shape')), zone: String(f.get('zone')) }) }); await load(); setZone(String(f.get('zone'))); setNotice('Mesa actualizada.'); }
+    try { await request(`/tables/${selected.id}`, { method: 'PATCH', body: JSON.stringify({ label: String(f.get('label')), seats: Number(f.get('seats')), shape: String(f.get('shape')), zone: String(f.get('zone')), ...measurePayload(f, String(f.get('shape'))) }) }); await load(); setZone(String(f.get('zone'))); setNotice('Mesa actualizada.'); }
     catch (err) { setError((err as Error).message); }
   }
   async function removeTable() {
     if (!selected || !confirm(`¿Eliminar ${selected.label} del plano?`)) return;
     try { await request(`/tables/${selected.id}`, { method: 'DELETE' }); setSelectedId(null); await load(); setNotice('Mesa eliminada.'); } catch (err) { setError((err as Error).message); }
   }
-  function nextFreeCell() { for (let y = 0; y < GRID_ROWS; y++) for (let x = 0; x < GRID_COLS; x++) if (!zoneTables.some(t => t.posX === x && t.posY === y)) return { posX: x, posY: y }; return { posX: 0, posY: 0 }; }
+  function nextFreeCell() { for (let y = 0; y < GRID_ROWS; y++) for (let x = 0; x < GRID_COLS; x++) if (!zoneTables.some(t => x >= t.posX && x < t.posX + cellsX(t) && y >= t.posY && y < t.posY + cellsY(t))) return { posX: x, posY: y }; return { posX: 0, posY: 0 }; }
 
   const cells: { x: number; y: number; table?: DiningTable }[] = [];
-  for (let y = 0; y < GRID_ROWS; y++) for (let x = 0; x < GRID_COLS; x++) cells.push({ x, y, table: zoneTables.find(t => t.posX === x && t.posY === y) });
+  for (let y = 0; y < GRID_ROWS; y++) for (let x = 0; x < GRID_COLS; x++) {
+    const table = zoneTables.find(t => x >= t.posX && x < t.posX + cellsX(t) && y >= t.posY && y < t.posY + cellsY(t));
+    if (!table || (table.posX === x && table.posY === y)) cells.push({ x, y, table });
+  }
   const offGrid = zoneTables.filter(t => t.posX >= GRID_COLS || t.posY >= GRID_ROWS);
 
   return <section className="tables-page">
     <div className="section-head"><div><h3>Mapa de mesas</h3><p>Toca una mesa para abrir su comanda, añadir productos o cobrar</p></div>
-      <div className="tables-head-actions"><button className="secondary" onClick={() => void load()}>Actualizar ↻</button>{canEdit && <button className={editMode ? 'primary' : 'secondary'} onClick={() => { setEditMode(!editMode); setDraft(null); }}>{editMode ? 'Terminar edición' : '✎ Editar plano'}</button>}</div></div>
+      <div className="tables-head-actions"><button className="secondary" onClick={() => void load()}>Actualizar ↻</button><button className="secondary" onClick={() => setZoom(z => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}>−</button><span className="zoom-label">{Math.round(zoom * 100)} %</span><button className="secondary" onClick={() => setZoom(z => Math.min(3, Math.round((z + 0.25) * 100) / 100))}>＋</button><button className="secondary" onClick={() => setZoom(1)}>Ajustar</button>{canEdit && <button className={editMode ? 'primary' : 'secondary'} onClick={() => { setEditMode(!editMode); setDraft(null); }}>{editMode ? 'Terminar edición' : '✎ Editar plano'}</button>}</div></div>
     {error && <div className="toast" onClick={() => setError('')}>{error} ×</div>}
     {notice && <div className="order-notice" onClick={() => setNotice('')}>✓ {notice}</div>}
     <div className="table-stats">
@@ -79,9 +107,10 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
     </div>
     <div className="legend">{(['free', 'open', 'sent', 'partial'] as TableState[]).map(s => <span key={s}><i className={`dot ${s}`} />{STATE_LABEL[s]}</span>)}</div>
     <div className="tables-layout">
-      <div className={`floor ${editMode ? 'editing' : ''}`} style={{ gridTemplateColumns: `repeat(${GRID_COLS}, minmax(0,1fr))` }}>
+      <div className="floor-scroll"><div className={`floor ${editMode ? 'editing' : ''}`} style={{ gridTemplateColumns: `repeat(${GRID_COLS}, ${CM_PER_CELL * PX_PER_CM * zoom}px)`, gridTemplateRows: `repeat(${GRID_ROWS}, ${CM_PER_CELL * PX_PER_CM * zoom}px)` }}>
         {cells.map(({ x, y, table }) => table
           ? <button key={table.id} draggable={editMode} onDragStart={() => setDragId(table.id)} onDragEnd={() => setDragId(null)}
+              style={{ gridColumn: `${table.posX + 1} / span ${cellsX(table)}`, gridRow: `${table.posY + 1} / span ${cellsY(table)}` }}
               className={`dining-table ${table.shape} ${tableState(table)} ${selectedId === table.id ? 'selected' : ''}`}
               onClick={() => { setSelectedId(table.id); setDraft(null); }} aria-label={`${table.label}: ${STATE_LABEL[tableState(table)]}`}>
               <strong>{table.label}</strong>
@@ -90,7 +119,7 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
           : <div key={`${x}-${y}`} className={`floor-cell ${draft && draft.posX === x && draft.posY === y ? 'draft' : ''}`} onClick={() => clickCell(x, y)}
               onDragOver={e => { if (editMode) e.preventDefault(); }} onDrop={e => { e.preventDefault(); if (dragId) void move(dragId, x, y); setDragId(null); }}>{editMode && <span>＋</span>}</div>)}
         {offGrid.map(t => <button key={t.id} className="dining-table offgrid" onClick={() => setSelectedId(t.id)}>{t.label}</button>)}
-      </div>
+      </div></div>
 
       <aside className="table-panel">
         {draft && editMode ? <form onSubmit={createTable} className="table-form">
@@ -98,7 +127,8 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
           <label>Nombre<input name="label" required autoFocus placeholder={`Mesa ${tables.length + 1}`} defaultValue={`${currentZone === 'Salón' ? 'Mesa' : currentZone} ${zoneTables.length + 1}`} /></label>
           <input type="hidden" name="zone" value={currentZone} />
           <label>Plazas<input name="seats" type="number" min="1" step="1" defaultValue={4} required /></label>
-          <label>Forma<select name="shape" defaultValue="square"><option value="square">Cuadrada</option><option value="round">Redonda</option><option value="bar">Barra / taburete</option></select></label>
+          <label>Forma<select name="shape" defaultValue="square"><option value="square">Cuadrada</option><option value="round">Redonda</option><option value="bar">Barra / taburete</option><option value="rect">Rectangular</option></select></label>
+          <MeasureFields />
           <div className="modal-actions"><button type="button" className="secondary" onClick={() => setDraft(null)}>Cancelar</button><button className="primary">Añadir mesa</button></div>
         </form>
         : !selected ? <div className="empty">{editMode ? <>Arrastra una mesa para moverla, o toca una casilla vacía para crear una nueva.<br /><br /><button className="secondary" onClick={() => setDraft(nextFreeCell())}>＋ Añadir mesa</button></> : 'Selecciona una mesa del plano.'}</div>
@@ -108,7 +138,8 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
           <label>Nombre<input name="label" required defaultValue={selected.label} /></label>
           <label>Zona<input name="zone" required defaultValue={selected.zone} list="zones-list" /><datalist id="zones-list">{zones.map(z => <option key={z} value={z} />)}</datalist></label>
           <label>Plazas<input name="seats" type="number" min="1" step="1" defaultValue={selected.seats} required /></label>
-          <label>Forma<select name="shape" defaultValue={selected.shape}><option value="square">Cuadrada</option><option value="round">Redonda</option><option value="bar">Barra / taburete</option></select></label>
+          <label>Forma<select name="shape" defaultValue={selected.shape}><option value="square">Cuadrada</option><option value="round">Redonda</option><option value="bar">Barra / taburete</option><option value="rect">Rectangular</option></select></label>
+          <MeasureFields table={selected} />
           <div className="modal-actions"><button type="button" className="remove-button" onClick={() => void removeTable()}>Eliminar mesa</button><button className="primary">Guardar</button></div>
         </form>
         : <div className="table-detail">
