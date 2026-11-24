@@ -53,7 +53,7 @@ La interfaz de comanda inicial está en modo MVP: agrupa localmente la selecció
 
 ## Mesas y cobro
 
-`dining_tables` guarda cada mesa con su zona (Salón, Terraza, Barra…), plazas, forma y posición en una cuadrícula del plano. `orders.table_id` vincula la comanda con su mesa y un índice único parcial garantiza una sola comanda activa (`open`/`sent`) por mesa: al abrir una comanda sobre una mesa ocupada, la API devuelve la existente y las nuevas líneas se suman a ella. El mapa muestra cada mesa como libre, comanda sin enviar, en cocina o con cobro parcial. Los pagos aceptan dos formas: tarjeta (datáfono TPV) y efectivo, guardando efectivo entregado y cambio; se pueden dividir en varios pagos. Al completar el total la comanda pasa a `paid` y la mesa queda libre.
+`dining_tables` guarda cada mesa con su zona (Salón, Terraza, Barra…), plazas, forma y posición en una cuadrícula del plano. `orders.table_id` vincula la comanda con su mesa y un índice único parcial garantiza una sola comanda activa (`open`/`sent`) por mesa: al abrir una comanda sobre una mesa ocupada, la API devuelve la existente y las nuevas líneas se suman a ella. El mapa muestra cada mesa como libre, comanda sin enviar, en cocina o con cobro parcial. Los pagos aceptan dos formas: tarjeta (datáfono TPV) y efectivo, guardando efectivo entregado y cambio; se pueden dividir en varios pagos. Al completar el total la comanda pasa a `paid` y la mesa queda libre. Dos mesas contiguas y alineadas se pueden unir: la resultante tiene forma `rect`, ocupa varias casillas (`span_x`/`span_y`), suma las plazas y guarda en `merged_from` el estado previo para poder separarlas.
 
 ## Finanzas
 
@@ -80,6 +80,8 @@ Cookie de sesión requerida en todos salvo el bootstrap y login. Roles: `admin` 
 | POST | `/api/recipes/:productId` | Reemplazar receta y definir extras permitidos mediante `allowedIngredientIds` |
 | GET / POST | `/api/tables` | Mapa de mesas con el estado de su comanda activa / crear mesa (admin, manager) |
 | PATCH / DELETE | `/api/tables/:id` | Renombrar, mover en el plano o retirar una mesa (solo sin comanda abierta) |
+| POST | `/api/tables/:id/join` | Une la mesa con otra contigua y alineada (`{ withId }`) en una mesa rectangular; la comanda abierta pasa a la mesa unida |
+| POST | `/api/tables/:id/split` | Deshace la última unión y devuelve la otra mesa a su sitio |
 | GET | `/api/categories` | Categorías de la carta |
 | GET | `/api/products/admin` | Carta completa para gestión, incluidos productos retirados |
 | DELETE | `/api/products/:id` | Quitar producto de la carta (se desactiva para conservar el histórico) |

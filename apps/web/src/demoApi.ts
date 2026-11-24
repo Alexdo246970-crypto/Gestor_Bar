@@ -6,7 +6,8 @@ type DemoProduct = Product & { description?: string | null; categoryName?: strin
 type DemoLine = { id: string; productId: string; productName: string; quantity: number; lineGross: number };
 type DemoPayment = { id: string; method: 'cash' | 'card'; amount: number; cashTendered: number | null; changeGiven: number | null; cardReference: string | null; paidAt: string };
 type DemoOrder = { id: string; orderNumber: number; status: 'open' | 'sent' | 'paid'; channel: string; tableId: string | null; tableLabel: string | null; openedAt: string; lines: DemoLine[]; payments: DemoPayment[] };
-type DemoTable = { id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar'; posX: number; posY: number };
+type JoinSnapshot = { joinedId: string; label: string; seats: number; shape: DemoTable['shape']; spanX: number; spanY: number; offX: number; offY: number; joinedOffX: number; joinedOffY: number };
+type DemoTable = { id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar' | 'rect'; posX: number; posY: number; spanX?: number; spanY?: number; mergedFrom?: JoinSnapshot[]; active?: boolean };
 type Store = { products: DemoProduct[]; categories: { id: string; name: string; sortOrder: number }[]; tables: DemoTable[]; orders: DemoOrder[]; nextOrder: number };
 
 const STORAGE_KEY = 'barraos-demo-v2';
@@ -54,6 +55,13 @@ function addLine(order: DemoOrder, productId: string, quantity: number, extrasNe
 }
 
 function orderView(o: DemoOrder) { return { ...o, grossTotal: gross(o), paidTotal: paid(o), lineCount: o.lines.length }; }
+function tableView(t: DemoTable) { const { mergedFrom, active, ...rest } = t; return { ...rest, spanX: t.spanX ?? 1, spanY: t.spanY ?? 1, joinedCount: mergedFrom?.length ?? 0 }; }
+/** "Mesa 1" + "Mesa 2" → "Mesa 1+2" (misma regla que la API). */
+function joinedLabel(first: string, second: string) {
+  const re = /^(.*?)\s*(\d+(?:\+\d+)*)$/, a = first.match(re), b = second.match(re);
+  if (a && b && a[1].toLocaleLowerCase('es') === b[1].toLocaleLowerCase('es')) return `${a[1]}${a[1] ? ' ' : ''}${a[2]}+${b[2]}`;
+  return `${first} + ${second}`;
+}
 function activeFor(tableId: string) { return load().orders.find(o => o.tableId === tableId && (o.status === 'open' || o.status === 'sent')); }
 
 export async function demoRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -98,18 +106,46 @@ function handle(s: Store, method: string, parts: string[], b: any): unknown {
   }
   // ---- Mesas ----
   if (root === 'tables') {
-    if (!id && method === 'GET') return s.tables.map(t => { const o = activeFor(t.id); return { ...t, activeOrder: o ? orderView(o) : null }; });
-    const checkLabel = (label: string, self?: string) => { if (s.tables.some(t => t.id !== self && t.label.toLocaleLowerCase('es') === label.toLocaleLowerCase('es'))) fail('Ya existe una mesa con ese nombre'); };
+    if (!id && method === 'GET') return s.tables.filter(t => t.active !== false).map(t => { const o = activeFor(t.id); return { ...tableView(t), activeOrder: o ? orderView(o) : null }; });
+    const checkLabel = (label: string, self?: string) => { if (s.tables.some(t => t.id !== self && t.active !== false && t.label.toLocaleLowerCase('es') === label.toLocaleLowerCase('es'))) fail('Ya existe una mesa con ese nombre'); };
     if (!id && method === 'POST') {
       const label = String(b.label || '').trim() || fail('El nombre de la mesa es obligatorio'); checkLabel(label);
       const t: DemoTable = { id: uid('table'), label, zone: b.zone?.trim() || 'Salón', seats: b.seats ?? 4, shape: b.shape ?? 'square', posX: b.posX ?? 0, posY: b.posY ?? 0 };
-      s.tables.push(t); return t;
+      s.tables.push(t); return tableView(t);
     }
-    const t = s.tables.find(x => x.id === id) ?? fail('Mesa no encontrada');
+    const t = s.tables.find(x => x.id === id && x.active !== false) ?? fail('Mesa no encontrada');
+    if (action === 'join' && method === 'POST') {
+      const o = s.tables.find(x => x.id === b.withId && x.id !== t.id && x.active !== false) ?? fail('Elige otra mesa para unir');
+      if (o.zone !== t.zone) fail('Solo se pueden unir mesas de la misma zona');
+      const [aw, ah, ow, oh] = [t.spanX ?? 1, t.spanY ?? 1, o.spanX ?? 1, o.spanY ?? 1];
+      const horizontal = t.posY === o.posY && ah === oh && (t.posX + aw === o.posX || o.posX + ow === t.posX);
+      const vertical = t.posX === o.posX && aw === ow && (t.posY + ah === o.posY || o.posY + oh === t.posY);
+      if (!horizontal && !vertical) fail('Las mesas deben estar juntas y alineadas para formar una mesa rectangular');
+      const ot = activeFor(t.id), oo = activeFor(o.id);
+      if (ot && oo) fail('Las dos mesas tienen comanda abierta; cobra una antes de unirlas');
+      const ux = Math.min(t.posX, o.posX), uy = Math.min(t.posY, o.posY);
+      const [first, second] = t.posX + t.posY <= o.posX + o.posY ? [t, o] : [o, t];
+      const label = joinedLabel(first.label, second.label); checkLabel(label, t.id);
+      t.mergedFrom = [...(t.mergedFrom ?? []), { joinedId: o.id, label: t.label, seats: t.seats, shape: t.shape, spanX: aw, spanY: ah, offX: t.posX - ux, offY: t.posY - uy, joinedOffX: o.posX - ux, joinedOffY: o.posY - uy }];
+      o.active = false;
+      Object.assign(t, { label, seats: t.seats + o.seats, shape: 'rect', posX: ux, posY: uy, spanX: horizontal ? aw + ow : aw, spanY: vertical ? ah + oh : ah });
+      const order = ot ?? oo; if (order) { order.tableId = t.id; order.tableLabel = label; }
+      return tableView(t);
+    }
+    if (action === 'split' && method === 'POST') {
+      const last = t.mergedFrom?.[t.mergedFrom.length - 1] ?? fail('Esta mesa no está unida a otra');
+      const o = s.tables.find(x => x.id === last.joinedId);
+      if (o) checkLabel(o.label, o.id);
+      const [px, py] = [t.posX, t.posY];
+      Object.assign(t, { label: last.label, seats: last.seats, shape: last.shape, spanX: last.spanX, spanY: last.spanY, posX: px + last.offX, posY: py + last.offY, mergedFrom: t.mergedFrom!.slice(0, -1) });
+      if (o) Object.assign(o, { active: true, zone: t.zone, posX: px + last.joinedOffX, posY: py + last.joinedOffY });
+      const order = activeFor(t.id); if (order) order.tableLabel = t.label;
+      return tableView(t);
+    }
     if (method === 'PATCH') {
       if (b.label !== undefined) { const label = String(b.label).trim() || fail('El nombre de la mesa no puede estar vacío'); checkLabel(label, t.id); t.label = label; const o = activeFor(t.id); if (o) o.tableLabel = label; }
       for (const k of ['zone', 'seats', 'shape', 'posX', 'posY'] as const) if (b[k] !== undefined) (t as any)[k] = b[k];
-      return t;
+      return tableView(t);
     }
     if (method === 'DELETE') { if (activeFor(t.id)) fail('La mesa tiene una comanda abierta; cóbrala antes de eliminarla'); s.tables = s.tables.filter(x => x !== t); return { ok: true }; }
   }
@@ -117,7 +153,7 @@ function handle(s: Store, method: string, parts: string[], b: any): unknown {
   if (root === 'orders') {
     if (!id && method === 'POST') {
       if (b.tableId) {
-        const t = s.tables.find(x => x.id === b.tableId) ?? fail('Mesa no encontrada');
+        const t = s.tables.find(x => x.id === b.tableId && x.active !== false) ?? fail('Mesa no encontrada');
         const existing = activeFor(t.id); if (existing) return { ...orderView(existing), reused: true };
         const o: DemoOrder = { id: uid('order'), orderNumber: s.nextOrder++, status: 'open', channel: 'table', tableId: t.id, tableLabel: t.label, openedAt: new Date().toISOString(), lines: [], payments: [] };
         s.orders.push(o); return { ...orderView(o), reused: false };
