@@ -34,7 +34,7 @@ database/           Migración PostgreSQL, RLS e índices
 
 - El login identifica el local por `slug`, email y contraseña. Las sesiones se guardan en PostgreSQL y se transportan en cookie `HttpOnly`, `Secure` en producción y `SameSite=Lax`.
 - El tenant se resuelve desde la sesión, nunca desde el cuerpo de una petición. La API establece `app.tenant_id` localmente en la transacción; las tablas tenant-scoped aplican RLS y FKs compuestas.
-- Roles: `admin`, `manager`, `waiter`, `cashier`. Los permisos se aplican con guards de NestJS.
+- Roles: `admin`, `manager`, `waiter`, `cashier` y `kitchen`. Los permisos se aplican con guards de NestJS. Cocina solo accede a comandas y a los ajustes de su impresora; no ve precios, costes, márgenes ni datos de clientes.
 - El pedido descuenta stock una única vez al cerrarse/pagarse; la transacción registra movimientos de inventario. Una anulación crea reversos, no borra movimientos.
 - La contabilidad es un informe operativo, no un sistema de presentación fiscal. Confirmar tipos, fechas y tratamiento del IVA con asesoría contable.
 - Para producción: TLS, secretos administrados, rate limiting, copias de seguridad, auditoría, política de retención, monitoreo y revisión de seguridad. Desactivar `/setup` una vez creado el primer administrador.

@@ -29,6 +29,9 @@ export class CoreController {
     });
   }
   @Get('menu') async menu(@Req() req: AuthRequest) {
+    const role = req.session?.app?.role;
+    if (!role) throw new UnauthorizedException();
+    if (!['admin','manager','waiter','cashier'].includes(role)) throw new ForbiddenException('Permiso insuficiente');
     try { return await this.db.tenant(req, async c => (await c.query(`SELECT p.id,p.name,p.description,p.category_id "categoryId",p.price_net "priceNet",p.vat_rate "vatRate",c.name "categoryName"
       FROM products p LEFT JOIN categories c ON c.tenant_id=p.tenant_id AND c.id=p.category_id WHERE p.active ORDER BY c.sort_order,p.name`)).rows); }
     catch (e) { if ((e as Error).message === 'AUTH_REQUIRED') throw new UnauthorizedException(); throw e; }
