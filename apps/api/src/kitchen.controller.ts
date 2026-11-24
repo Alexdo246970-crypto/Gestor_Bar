@@ -26,9 +26,9 @@ export class KitchenController {
   @Get('kitchen/orders') async orders(@Req() req: AuthRequest) {
     const s = this.session(req);
     return this.db.tenant(req, async c => (await c.query(`SELECT o.id,o.order_number "orderNumber",o.table_label "tableLabel",o.channel,o.opened_at "openedAt",
-      json_agg(json_build_object('id',l.id,'name',l.product_name,'quantity',l.quantity,'kitchenStatus',l.kitchen_status,'modifications',coalesce((SELECT json_agg(json_build_object('action',m.action,'ingredient',i.name)) FROM order_line_modifications m JOIN ingredients i ON i.tenant_id=m.tenant_id AND i.id=m.ingredient_id WHERE m.tenant_id=l.tenant_id AND m.order_line_id=l.id),'[]'::json)) ORDER BY l.id) FILTER (WHERE l.id IS NOT NULL) lines
-      FROM orders o LEFT JOIN order_lines l ON l.tenant_id=o.tenant_id AND l.order_id=o.id WHERE o.tenant_id=$1 AND o.status='sent'
-      GROUP BY o.id HAVING bool_or(l.kitchen_status<>'ready') ORDER BY o.opened_at`, [s.tenantId])).rows);
+      json_agg(json_build_object('id',l.id,'name',l.product_name,'quantity',l.quantity,'kitchenStatus',l.kitchen_status,'station',coalesce(p.kitchen_station,'kitchen'),'modifications',coalesce((SELECT json_agg(json_build_object('action',m.action,'ingredient',i.name)) FROM order_line_modifications m JOIN ingredients i ON i.tenant_id=m.tenant_id AND i.id=m.ingredient_id WHERE m.tenant_id=l.tenant_id AND m.order_line_id=l.id),'[]'::json)) ORDER BY l.id) FILTER (WHERE l.id IS NOT NULL) lines
+      FROM orders o LEFT JOIN order_lines l ON l.tenant_id=o.tenant_id AND l.order_id=o.id LEFT JOIN products p ON p.tenant_id=l.tenant_id AND p.id=l.product_id WHERE o.tenant_id=$1 AND o.status='sent'
+      GROUP BY o.id ORDER BY o.opened_at`, [s.tenantId])).rows);
   }
 
   @Patch('kitchen/lines/:id/status') async lineStatus(@Req() req: AuthRequest, @Param('id') id: string, @Body() b: { status: string }) {
