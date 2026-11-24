@@ -34,7 +34,7 @@ export class OrdersController {
   }
   @Get('active') async active(@Req() req:AuthRequest){const s=this.role(req,['admin','manager','waiter','cashier']);return this.db.tenant(req,async c=>(await c.query(`SELECT o.id,o.order_number "orderNumber",o.status,o.channel,o.table_id "tableId",o.table_label "tableLabel",o.opened_at "openedAt",o.gross_total "grossTotal",count(l.id)::int "lineCount",(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.tenant_id=o.tenant_id AND p.order_id=o.id) "paidTotal" FROM orders o LEFT JOIN order_lines l ON l.tenant_id=o.tenant_id AND l.order_id=o.id WHERE o.tenant_id=$1 AND o.status IN ('open','sent') GROUP BY o.id ORDER BY o.opened_at`,[s.tenantId])).rows);}
   @Get(':id') async detail(@Req() req:AuthRequest,@Param('id') id:string){const s=this.role(req,['admin','manager','waiter','cashier']);return this.db.tenant(req,async c=>{const order=await c.query(`SELECT id,order_number "orderNumber",status,channel,table_id "tableId",table_label "tableLabel",opened_at "openedAt",gross_total "grossTotal",(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.tenant_id=orders.tenant_id AND p.order_id=orders.id) "paidTotal" FROM orders WHERE tenant_id=$1 AND id=$2`,[s.tenantId,id]);if(!order.rows[0])throw new BadRequestException('Pedido no encontrado');const lines=await c.query(`SELECT id,product_id "productId",product_name "productName",quantity,line_gross "lineGross" FROM order_lines WHERE tenant_id=$1 AND order_id=$2 ORDER BY id`,[s.tenantId,id]);const payments=await c.query(`SELECT id,method,amount,cash_tendered "cashTendered",change_given "changeGiven",card_reference "cardReference",paid_at "paidAt" FROM payments WHERE tenant_id=$1 AND order_id=$2 ORDER BY paid_at`,[s.tenantId,id]);return{...order.rows[0],lines:lines.rows,payments:payments.rows};});}
-  @Post(':id/lines') async addLines(@Req() req: AuthRequest, @Param('id') id: string, @Body() b: { productId: string; quantity: number; removeIngredientIds?: string[]; addedIngredients?: {ingredientId:string;quantity:number}[] }) {
+  @Post(':id/lines') async addLines(@Req() req: AuthRequest, @Param('id') id: string, @Body() b: { productId: string; quantity: number; unitPriceGross?: number; removeIngredientIds?: string[]; addedIngredients?: {ingredientId:string;quantity:number}[] }) {
     const s = this.role(req, ['admin','manager','waiter']);
     if (!b?.productId || !Number.isFinite(b.quantity) || b.quantity <= 0) throw new BadRequestException('Producto y cantidad positiva requeridos');
     return this.db.tenant(req, async c => {
@@ -49,7 +49,13 @@ export class OrdersController {
         if(!allowed.rows[0]) throw new BadRequestException('Ese ingrediente extra no está permitido para este plato');
         const unitPriceNet=Number(allowed.rows[0].extra_price_net);extraUnitNet+=unitPriceNet;added.push({...extra,unitPriceNet});
       }
-      const unitNet=Number(x.price_net)+extraUnitNet,net=unitNet*b.quantity,vat=net*Number(x.vat_rate)/100;
+      let unitNet=Number(x.price_net)+extraUnitNet;
+      if (b.unitPriceGross !== undefined) {
+        if (!['admin','manager'].includes(s.role)) throw new ForbiddenException('Solo administración puede ajustar precios');
+        if (!Number.isFinite(b.unitPriceGross) || b.unitPriceGross < 0) throw new BadRequestException('Precio ajustado no válido');
+        unitNet = Math.round((b.unitPriceGross / (1 + Number(x.vat_rate) / 100)) * 100) / 100;
+      }
+      const net=unitNet*b.quantity,vat=net*Number(x.vat_rate)/100;
       const line = await c.query(`INSERT INTO order_lines(tenant_id,order_id,product_id,product_name,quantity,unit_net,vat_rate,line_net,line_vat,line_gross)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,[s.tenantId,id,x.id,x.name,b.quantity,unitNet,x.vat_rate,net.toFixed(2),vat.toFixed(2),(net+vat).toFixed(2)]);
       const lineId=line.rows[0].id;

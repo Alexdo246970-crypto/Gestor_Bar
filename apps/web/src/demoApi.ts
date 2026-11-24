@@ -69,6 +69,7 @@ function handle(s: Store, method: string, parts: string[], b: any): unknown {
   const [root, id, action] = parts;
   // ---- Carta ----
   if (root === 'menu' && method === 'GET') return s.products.filter(p => p.active !== false);
+
   if (root === 'categories' && method === 'GET') return s.categories;
   if (root === 'categories' && method === 'POST') {
     const name = String(b.name || '').trim() || fail('Nombre requerido');
@@ -132,6 +133,11 @@ function handle(s: Store, method: string, parts: string[], b: any): unknown {
       if (!['open', 'sent'].includes(o.status)) fail('Pedido inexistente, cerrado o no modificable');
       if (!b.productId || !(b.quantity > 0)) fail('Producto y cantidad positiva requeridos');
       addLine(o, b.productId, b.quantity, (b.addedIngredients || []).reduce((sum: number, i: any) => sum + Number(i.extraPriceNet || 0), 0));
+      if (b.unitPriceGross !== undefined) {
+        const price = Number(b.unitPriceGross);
+        if (!Number.isFinite(price) || price < 0) fail('Precio ajustado no válido');
+        o.lines[o.lines.length - 1].lineGross = round(price * Number(b.quantity));
+      }
       return { ok: true };
     }
     if (action === 'send' && method === 'POST') { if (!['open', 'sent'].includes(o.status)) fail('El pedido no existe o ya fue enviado'); o.status = 'sent'; return { ok: true, orderId: o.id }; }
