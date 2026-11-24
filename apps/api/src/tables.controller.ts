@@ -46,10 +46,12 @@ export class TablesController {
     const s = this.session(req, ['admin', 'manager']);
     this.validate(b, false);
     return this.db.tenant(req, async c => {
+      const zone = b.zone?.trim() || 'Salón';
+      const room = (await c.query('SELECT id FROM rooms WHERE tenant_id=$1 AND lower(name)=lower($2)', [s.tenantId, zone])).rows[0];
       try {
-        return (await c.query(`INSERT INTO dining_tables(tenant_id,label,zone,seats,shape,pos_x,pos_y) VALUES($1,$2,$3,$4,$5,$6,$7)
+        return (await c.query(`INSERT INTO dining_tables(tenant_id,label,zone,room_id,seats,shape,pos_x,pos_y) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
           RETURNING id,label,zone,seats,shape,pos_x "posX",pos_y "posY"`,
-          [s.tenantId, b.label!.trim(), b.zone?.trim() || 'Salón', b.seats ?? 4, b.shape ?? 'square', b.posX ?? 0, b.posY ?? 0])).rows[0];
+          [s.tenantId, b.label!.trim(), zone, room?.id ?? null, b.seats ?? 4, b.shape ?? 'square', b.posX ?? 0, b.posY ?? 0])).rows[0];
       } catch (e) { this.duplicate(e); }
     });
   }
@@ -58,11 +60,12 @@ export class TablesController {
     const s = this.session(req, ['admin', 'manager']);
     this.validate(b, true);
     return this.db.tenant(req, async c => {
+      const room = b.zone ? (await c.query('SELECT id FROM rooms WHERE tenant_id=$1 AND lower(name)=lower($2)', [s.tenantId, b.zone.trim()])).rows[0] : null;
       try {
-        const r = await c.query(`UPDATE dining_tables SET label=coalesce($3,label),zone=coalesce($4,zone),seats=coalesce($5,seats),
-            shape=coalesce($6,shape),pos_x=coalesce($7,pos_x),pos_y=coalesce($8,pos_y)
+        const r = await c.query(`UPDATE dining_tables SET label=coalesce($3,label),zone=coalesce($4,zone),
+            room_id=coalesce($9,room_id),seats=coalesce($5,seats),shape=coalesce($6,shape),pos_x=coalesce($7,pos_x),pos_y=coalesce($8,pos_y)
           WHERE tenant_id=$1 AND id=$2 AND active RETURNING id,label,zone,seats,shape,pos_x "posX",pos_y "posY"`,
-          [s.tenantId, id, b.label?.trim() ?? null, b.zone?.trim() || null, b.seats ?? null, b.shape ?? null, b.posX ?? null, b.posY ?? null]);
+          [s.tenantId, id, b.label?.trim() ?? null, b.zone?.trim() || null, b.seats ?? null, b.shape ?? null, b.posX ?? null, b.posY ?? null, room?.id ?? null]);
         if (!r.rowCount) throw new BadRequestException('Mesa no encontrada');
         // Mantener el nombre visible de la comanda abierta sincronizado con la mesa.
         if (b.label) await c.query("UPDATE orders SET table_label=$3 WHERE tenant_id=$1 AND table_id=$2 AND status IN ('open','sent')", [s.tenantId, id, r.rows[0].label]);
