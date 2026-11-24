@@ -15,7 +15,7 @@ const minutesSince = (iso: string) => Math.max(0, Math.round((Date.now() - new D
 
 /** Plano de sala: cada mesa muestra en tiempo real el estado de su comanda. */
 export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenInPos: (table: { id: string; label: string }) => void }) {
-  const [tables, setTables] = useState<DiningTable[]>([]), [zone, setZone] = useState(''), [selectedId, setSelectedId] = useState<string | null>(null), [detail, setDetail] = useState<OrderDetail | null>(null), [editMode, setEditMode] = useState(false), [paying, setPaying] = useState<string | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [draft, setDraft] = useState<{ posX: number; posY: number } | null>(null), [dragId, setDragId] = useState<string | null>(null), [pendingZone, setPendingZone] = useState<string | null>(null);
+  const [tables, setTables] = useState<DiningTable[]>([]), [zone, setZone] = useState(''), [selectedId, setSelectedId] = useState<string | null>(null), [detail, setDetail] = useState<OrderDetail | null>(null), [editMode, setEditMode] = useState(false), [paying, setPaying] = useState<string | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [draft, setDraft] = useState<{ posX: number; posY: number } | null>(null), [dragId, setDragId] = useState<string | null>(null), [pendingZone, setPendingZone] = useState<string | null>(null), [zoom, setZoom] = useState(1);
 
   async function load() { try { setTables(await request<DiningTable[]>('/tables')); } catch (e) { setError((e as Error).message); } }
   useEffect(() => { void load(); const timer = setInterval(() => void load(), 15000); return () => clearInterval(timer); }, []);
@@ -66,7 +66,7 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
 
   return <section className="tables-page">
     <div className="section-head"><div><h3>Mapa de mesas</h3><p>Toca una mesa para abrir su comanda, añadir productos o cobrar</p></div>
-      <div className="tables-head-actions"><button className="secondary" onClick={() => void load()}>Actualizar ↻</button>{canEdit && <button className={editMode ? 'primary' : 'secondary'} onClick={() => { setEditMode(!editMode); setDraft(null); }}>{editMode ? 'Terminar edición' : '✎ Editar plano'}</button>}</div></div>
+      <div className="tables-head-actions"><button className="secondary" onClick={() => void load()}>Actualizar ↻</button><button className="secondary" onClick={() => setZoom(z => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))} aria-label="Reducir zoom">−</button><span className="zoom-label">{Math.round(zoom * 100)} %</span><button className="secondary" onClick={() => setZoom(z => Math.min(3, Math.round((z + 0.25) * 100) / 100))} aria-label="Aumentar zoom">＋</button><button className="secondary" onClick={() => setZoom(1)}>Ajustar</button>{canEdit && <button className={editMode ? 'primary' : 'secondary'} onClick={() => { setEditMode(!editMode); setDraft(null); }}>{editMode ? 'Terminar edición' : '✎ Editar plano'}</button>}</div></div>
     {error && <div className="toast" onClick={() => setError('')}>{error} ×</div>}
     {notice && <div className="order-notice" onClick={() => setNotice('')}>✓ {notice}</div>}
     <div className="table-stats">
@@ -77,9 +77,9 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
     <div className="zone-tabs">{zones.map(z => <button key={z} className={z === currentZone ? 'selected' : ''} onClick={() => { setZone(z); setSelectedId(null); setDraft(null); }}>{z}<span>{tables.filter(t => t.zone === z && t.activeOrder).length}/{tables.filter(t => t.zone === z).length}</span></button>)}
       {editMode && <button className="zone-add" onClick={() => { const name = prompt('Nombre de la nueva zona (p. ej. Reservado)')?.trim(); if (name) { setPendingZone(name); setZone(name); setSelectedId(null); setDraft({ posX: 0, posY: 0 }); setNotice(`Añade la primera mesa de «${name}».`); } }}>＋ Zona</button>}
     </div>
-    <div className="legend">{(['free', 'open', 'sent', 'partial'] as TableState[]).map(s => <span key={s}><i className={`dot ${s}`} />{STATE_LABEL[s]}</span>)}</div>
+    <div className="legend">{(['free', 'open', 'sent', 'partial'] as TableState[]).map(st => <span key={st}><i className={`dot ${st}`} />{STATE_LABEL[st]} <b>{tables.filter(t => t.zone === currentZone && tableState(t) === st).length}</b></span>)}</div>
     <div className="tables-layout">
-      <div className={`floor ${editMode ? 'editing' : ''}`} style={{ gridTemplateColumns: `repeat(${GRID_COLS}, minmax(0,1fr))` }}>
+      <div className="floor-scroll"><div className={`floor ${editMode ? 'editing' : ''}`} style={{ gridTemplateColumns: `repeat(${GRID_COLS}, minmax(0,1fr))`, transform: `scale(${zoom})`, transformOrigin: 'top left' }}>
         {cells.map(({ x, y, table }) => table
           ? <button key={table.id} draggable={editMode} onDragStart={() => setDragId(table.id)} onDragEnd={() => setDragId(null)}
               className={`dining-table ${table.shape} ${tableState(table)} ${selectedId === table.id ? 'selected' : ''}`}
@@ -90,7 +90,7 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
           : <div key={`${x}-${y}`} className={`floor-cell ${draft && draft.posX === x && draft.posY === y ? 'draft' : ''}`} onClick={() => clickCell(x, y)}
               onDragOver={e => { if (editMode) e.preventDefault(); }} onDrop={e => { e.preventDefault(); if (dragId) void move(dragId, x, y); setDragId(null); }}>{editMode && <span>＋</span>}</div>)}
         {offGrid.map(t => <button key={t.id} className="dining-table offgrid" onClick={() => setSelectedId(t.id)}>{t.label}</button>)}
-      </div>
+      </div></div>
 
       <aside className="table-panel">
         {draft && editMode ? <form onSubmit={createTable} className="table-form">
