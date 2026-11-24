@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { DiningTable, OrderDetail, euro, request } from './lib';
+import { API, DiningTable, OrderDetail, euro, request } from './lib';
 import { PaymentModal } from './PaymentModal';
 
 export const GRID_COLS = 8, GRID_ROWS = 5;
@@ -18,7 +18,11 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
   const [tables, setTables] = useState<DiningTable[]>([]), [zone, setZone] = useState(''), [selectedId, setSelectedId] = useState<string | null>(null), [detail, setDetail] = useState<OrderDetail | null>(null), [editMode, setEditMode] = useState(false), [paying, setPaying] = useState<string | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [draft, setDraft] = useState<{ posX: number; posY: number } | null>(null), [dragId, setDragId] = useState<string | null>(null), [pendingZone, setPendingZone] = useState<string | null>(null);
 
   async function load() { try { setTables(await request<DiningTable[]>('/tables')); } catch (e) { setError((e as Error).message); } }
-  useEffect(() => { void load(); const timer = setInterval(() => void load(), 15000); return () => clearInterval(timer); }, []);
+  useEffect(() => { void load(); const timer = setInterval(() => void load(), 30000);
+    const events = new EventSource(`${API}/tables/events`, { withCredentials: true });
+    events.onmessage = () => void load();
+    return () => { clearInterval(timer); events.close(); };
+  }, []);
 
   const zones = useMemo(() => { const list = [...new Set(tables.map(t => t.zone))]; if (pendingZone && !list.includes(pendingZone)) list.push(pendingZone); return list.length ? list : ['Salón']; }, [tables, pendingZone]);
   const currentZone = zones.includes(zone) ? zone : zones[0];
@@ -91,6 +95,9 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
               onDragOver={e => { if (editMode) e.preventDefault(); }} onDrop={e => { e.preventDefault(); if (dragId) void move(dragId, x, y); setDragId(null); }}>{editMode && <span>＋</span>}</div>)}
         {offGrid.map(t => <button key={t.id} className="dining-table offgrid" onClick={() => setSelectedId(t.id)}>{t.label}</button>)}
       </div>
+      <div className="mobile-table-list">{zoneTables.map(t => <button key={t.id} className={`mobile-table ${tableState(t)}`} onClick={() => { setSelectedId(t.id); setDraft(null); }}>
+        <strong>{t.label}</strong><span>{STATE_LABEL[tableState(t)]}</span>{t.activeOrder && <small>{euro(Number(t.activeOrder.grossTotal) - Number(t.activeOrder.paidTotal))}</small>}
+      </button>)}</div>
 
       <aside className="table-panel">
         {draft && editMode ? <form onSubmit={createTable} className="table-form">
