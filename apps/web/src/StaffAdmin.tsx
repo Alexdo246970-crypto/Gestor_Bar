@@ -1,0 +1,14 @@
+import { FormEvent, useEffect, useState } from 'react';
+import { request } from './lib';
+
+type StaffMember = {id:string;email:string;fullName:string;role:string};
+const roleLabels:Record<string,string>={manager:'Encargado',waiter:'Camarero',temporary_waiter:'Camarero temporal',cashier:'Caja'};
+const roleHelp:Record<string,string>={manager:'Gestiona carta, mesas, inventario y finanzas.',waiter:'Crea y modifica comandas durante el servicio.',temporary_waiter:'Crea y amplía comandas durante el servicio; no gestiona carta, inventario ni cobros.',cashier:'Consulta pedidos y registra cobros.'};
+
+export function StaffAdmin(){
+  const [staff,setStaff]=useState<StaffMember[]>([]),[error,setError]=useState(''),[notice,setNotice]=useState(''),[role,setRole]=useState('waiter'),[saving,setSaving]=useState(false);
+  async function load(){try{setStaff(await request<StaffMember[]>('/staff'))}catch(e){setError((e as Error).message)}}
+  useEffect(()=>{void load()},[]);
+  async function add(e:FormEvent<HTMLFormElement>){e.preventDefault();if(saving)return;setSaving(true);setError('');const form=e.currentTarget;const f=new FormData(form);try{await request('/staff',{method:'POST',body:JSON.stringify({email:String(f.get('email')),fullName:String(f.get('fullName')),password:String(f.get('password')),role})});form.reset();setNotice('Perfil creado. Comparte las credenciales de forma segura.');await load()}catch(err){setError((err as Error).message)}finally{setSaving(false)}}
+  return <section className="menu-admin"><div className="section-head"><div><h3>Equipo y permisos</h3><p>Perfiles disponibles para el personal del local</p></div></div>{error&&<div className="toast" onClick={()=>setError('')}>{error} ×</div>}{notice&&<div className="order-notice" onClick={()=>setNotice('')}>✓ {notice}</div>}<div className="table">{staff.map(member=><div className="table-row" key={member.id}><span><strong>{member.fullName}</strong><small className="inventory-sub">{member.email}</small></span><span className="state-pill sent">{roleLabels[member.role]||member.role}</span></div>)}</div><form className="package-modal staff-form" onSubmit={add}><p className="eyebrow">AÑADIR AL EQUIPO</p><label>Nombre<input name="fullName" required/></label><label>Email<input name="email" type="email" required/></label><label>Contraseña temporal<input name="password" type="password" minLength={12} required/><small className="inventory-sub">Mínimo 12 caracteres.</small></label><label>Perfil<select value={role} onChange={e=>setRole(e.target.value)}>{Object.keys(roleLabels).map(key=><option key={key} value={key}>{roleLabels[key]}</option>)}</select></label><p className="modal-description">{roleHelp[role]}</p><button className="primary" disabled={saving}>{saving?'Creando…':'Crear perfil'}</button></form></section>;
+}

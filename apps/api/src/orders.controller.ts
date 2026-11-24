@@ -14,7 +14,7 @@ export class OrdersController {
   }
   /** Abre una comanda. Con `tableId` la vincula a la mesa; si la mesa ya tiene una comanda activa, devuelve esa misma. */
   @Post() async create(@Req() req: AuthRequest, @Body() b: { channel?: string; tableLabel?: string; tableId?: string }) {
-    const s = this.role(req, ['admin','manager','waiter','cashier']);
+    const s = this.role(req, ['admin','manager','waiter','temporary_waiter','cashier']);
     if (b?.channel && !['table','counter','delivery'].includes(b.channel)) throw new BadRequestException('Canal no válido');
     return this.db.tenant(req, async c => {
       if (b?.tableId) {
@@ -32,10 +32,10 @@ export class OrdersController {
       return { ...r.rows[0], reused: false };
     });
   }
-  @Get('active') async active(@Req() req:AuthRequest){const s=this.role(req,['admin','manager','waiter','cashier']);return this.db.tenant(req,async c=>(await c.query(`SELECT o.id,o.order_number "orderNumber",o.status,o.channel,o.table_id "tableId",o.table_label "tableLabel",o.opened_at "openedAt",o.gross_total "grossTotal",count(l.id)::int "lineCount",(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.tenant_id=o.tenant_id AND p.order_id=o.id) "paidTotal" FROM orders o LEFT JOIN order_lines l ON l.tenant_id=o.tenant_id AND l.order_id=o.id WHERE o.tenant_id=$1 AND o.status IN ('open','sent') GROUP BY o.id ORDER BY o.opened_at`,[s.tenantId])).rows);}
-  @Get(':id') async detail(@Req() req:AuthRequest,@Param('id') id:string){const s=this.role(req,['admin','manager','waiter','cashier']);return this.db.tenant(req,async c=>{const order=await c.query(`SELECT id,order_number "orderNumber",status,channel,table_id "tableId",table_label "tableLabel",opened_at "openedAt",gross_total "grossTotal",(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.tenant_id=orders.tenant_id AND p.order_id=orders.id) "paidTotal" FROM orders WHERE tenant_id=$1 AND id=$2`,[s.tenantId,id]);if(!order.rows[0])throw new BadRequestException('Pedido no encontrado');const lines=await c.query(`SELECT id,product_id "productId",product_name "productName",quantity,line_gross "lineGross" FROM order_lines WHERE tenant_id=$1 AND order_id=$2 ORDER BY id`,[s.tenantId,id]);const payments=await c.query(`SELECT id,method,amount,cash_tendered "cashTendered",change_given "changeGiven",card_reference "cardReference",paid_at "paidAt" FROM payments WHERE tenant_id=$1 AND order_id=$2 ORDER BY paid_at`,[s.tenantId,id]);return{...order.rows[0],lines:lines.rows,payments:payments.rows};});}
+  @Get('active') async active(@Req() req:AuthRequest){const s=this.role(req,['admin','manager','waiter','temporary_waiter','cashier']);return this.db.tenant(req,async c=>(await c.query(`SELECT o.id,o.order_number "orderNumber",o.status,o.channel,o.table_id "tableId",o.table_label "tableLabel",o.opened_at "openedAt",o.gross_total "grossTotal",count(l.id)::int "lineCount",(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.tenant_id=o.tenant_id AND p.order_id=o.id) "paidTotal" FROM orders o LEFT JOIN order_lines l ON l.tenant_id=o.tenant_id AND l.order_id=o.id WHERE o.tenant_id=$1 AND o.status IN ('open','sent') GROUP BY o.id ORDER BY o.opened_at`,[s.tenantId])).rows);}
+  @Get(':id') async detail(@Req() req:AuthRequest,@Param('id') id:string){const s=this.role(req,['admin','manager','waiter','temporary_waiter','cashier']);return this.db.tenant(req,async c=>{const order=await c.query(`SELECT id,order_number "orderNumber",status,channel,table_id "tableId",table_label "tableLabel",opened_at "openedAt",gross_total "grossTotal",(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.tenant_id=orders.tenant_id AND p.order_id=orders.id) "paidTotal" FROM orders WHERE tenant_id=$1 AND id=$2`,[s.tenantId,id]);if(!order.rows[0])throw new BadRequestException('Pedido no encontrado');const lines=await c.query(`SELECT id,product_id "productId",product_name "productName",quantity,line_gross "lineGross" FROM order_lines WHERE tenant_id=$1 AND order_id=$2 ORDER BY id`,[s.tenantId,id]);const payments=await c.query(`SELECT id,method,amount,cash_tendered "cashTendered",change_given "changeGiven",card_reference "cardReference",paid_at "paidAt" FROM payments WHERE tenant_id=$1 AND order_id=$2 ORDER BY paid_at`,[s.tenantId,id]);return{...order.rows[0],lines:lines.rows,payments:payments.rows};});}
   @Post(':id/lines') async addLines(@Req() req: AuthRequest, @Param('id') id: string, @Body() b: { productId: string; quantity: number; removeIngredientIds?: string[]; addedIngredients?: {ingredientId:string;quantity:number}[] }) {
-    const s = this.role(req, ['admin','manager','waiter']);
+    const s = this.role(req, ['admin','manager','waiter','temporary_waiter']);
     if (!b?.productId || !Number.isFinite(b.quantity) || b.quantity <= 0) throw new BadRequestException('Producto y cantidad positiva requeridos');
     return this.db.tenant(req, async c => {
       const order = await c.query('SELECT status FROM orders WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [s.tenantId,id]);
@@ -68,7 +68,7 @@ export class OrdersController {
     });
   }
   @Post(':id/send') async send(@Req() req: AuthRequest, @Param('id') id: string) {
-    const s=this.role(req,['admin','manager','waiter']);
+    const s=this.role(req,['admin','manager','waiter','temporary_waiter']);
     return this.db.tenant(req,async c=>{
       const r=await c.query("UPDATE orders SET status='sent' WHERE tenant_id=$1 AND id=$2 AND status IN ('open','sent') RETURNING id",[s.tenantId,id]);
       if (!r.rowCount) throw new BadRequestException('El pedido no existe o ya fue enviado');
