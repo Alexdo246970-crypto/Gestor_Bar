@@ -10,6 +10,7 @@ import { CatalogController } from './catalog.controller';
 import { TablesController } from './tables.controller';
 import { RoomsController } from './rooms.controller';
 import { LedgerController } from './ledger.controller';
+import { TaxesController } from './taxes.controller';
 import { SalariesController } from './salaries.controller';
 import { PurchasesController, SuppliersController } from './purchases.controller';
 
