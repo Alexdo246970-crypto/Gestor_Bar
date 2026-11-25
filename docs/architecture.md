@@ -59,6 +59,10 @@ La interfaz de comanda inicial está en modo MVP: agrupa localmente la selecció
 
 `GET /reports/daily` consulta pedidos pagados por fecha de cierre local, pagos por fecha local, facturas de proveedores recibidas y gastos operativos. Devuelve coste neto y bruto por proveedor, IVA de compra marcado como deducible, IVA deducible de gastos, IVA repercutido, estimación de liquidación, consumo de ingredientes, margen bruto, resultado operativo y ejecución de presupuestos. Cada ingrediente guarda formato (por ejemplo, pack de seis briks), cantidad base por paquete y precio neto por paquete. La recepción convierte paquetes a cantidades de inventario y actualiza el coste medio ponderado; los movimientos de venta guardan el coste aplicado. La fecha de negocio respeta `tenants.timezone`. Las líneas conservan precio e IVA históricos aunque cambie el catálogo. La liquidación de IVA es orientativa y debe verificarse con facturas y normativa.
 
+### Mesa redonda: medidas y capacidad (#36)
+
+`dining_tables.diameter_cm` guarda diámetros de 50 a 200 cm en pasos de 0,5 cm. El catálogo de referencia propone 70→3, 90→4, 120→8 y 150→10 comensales, pero la API admite medidas intermedias y una capacidad editable de 1 a 20. `GET /api/tables` devuelve `diameterCm`, `seatsRecommended` y `seatsWarning` (desviación superior a una plaza); la migración asigna 90 cm a las mesas redondas existentes de hasta 4 plazas y 120 cm al resto. Cambiar la medida no toca la comanda abierta; solo se actualizan los campos de la mesa.
+
 ## Esquema SQL
 
 Las migraciones ejecutables `database/migrations/001_initial.sql` y `002_inventory_packages_and_vat.sql` crean locales, usuarios y membresías, categorías, carta, ingredientes con formato/precio de compra, recetas y extras compatibles, proveedores, facturas de compra y líneas, menús diarios, pedidos y detalle, pagos, movimientos de stock, cierres de caja, gastos operativos, presupuestos, sesiones, índices y políticas RLS. El runner registra versiones y aplica la segunda migración de forma incremental a instalaciones previas.
@@ -80,6 +84,7 @@ Cookie de sesión requerida en todos salvo el bootstrap y login. Roles: `admin` 
 | POST | `/api/recipes/:productId` | Reemplazar receta y definir extras permitidos mediante `allowedIngredientIds` |
 | GET / POST | `/api/tables` | Mapa de mesas con el estado de su comanda activa / crear mesa (admin, manager) |
 | PATCH / DELETE | `/api/tables/:id` | Renombrar, mover en el plano o retirar una mesa (solo sin comanda abierta) |
+| GET | `/api/tables` | Incluye `diameterCm`, `seatsRecommended` y `seatsWarning` de mesas redondas |
 | GET | `/api/categories` | Categorías de la carta |
 | GET | `/api/products/admin` | Carta completa para gestión, incluidos productos retirados |
 | DELETE | `/api/products/:id` | Quitar producto de la carta (se desactiva para conservar el histórico) |
