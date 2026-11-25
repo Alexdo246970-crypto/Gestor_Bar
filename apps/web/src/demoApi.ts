@@ -6,7 +6,7 @@ type DemoProduct = Product & { description?: string | null; categoryName?: strin
 type DemoLine = { id: string; productId: string; productName: string; quantity: number; lineGross: number };
 type DemoPayment = { id: string; method: 'cash' | 'card'; amount: number; cashTendered: number | null; changeGiven: number | null; cardReference: string | null; paidAt: string };
 type DemoOrder = { id: string; orderNumber: number; status: 'open' | 'sent' | 'paid'; channel: string; tableId: string | null; tableLabel: string | null; openedAt: string; lines: DemoLine[]; payments: DemoPayment[] };
-type DemoTable = { id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar'; posX: number; posY: number };
+type DemoTable = { id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar'; posX: number; posY: number; diameterCm?: number; seatsRecommended?: number; seatsWarning?: boolean };
 type Store = { products: DemoProduct[]; categories: { id: string; name: string; sortOrder: number }[]; tables: DemoTable[]; orders: DemoOrder[]; nextOrder: number };
 
 const STORAGE_KEY = 'barraos-demo-v2';
@@ -20,6 +20,14 @@ const round = (n: number) => Math.round(n * 100) / 100;
 const gross = (o: DemoOrder) => round(o.lines.reduce((s, l) => s + l.lineGross, 0));
 const paid = (o: DemoOrder) => round(o.payments.reduce((s, p) => s + p.amount, 0));
 const fail = (message: string): never => { throw new Error(message); };
+const ROUND: [number, number][] = [[70, 3], [90, 4], [120, 8], [150, 10]];
+const roundRecommended = (d: number) => ROUND.reduce((best, item) => Math.abs(item[0] - d) < Math.abs(best[0] - d) ? item : best)[1];
+const roundWarning = (t: DemoTable) => t.seatsRecommended != null && Math.abs(t.seats - t.seatsRecommended) > 1;
+function roundDiameter(value: unknown) {
+  const d = Number(value ?? 90);
+  if (!(d >= 50 && d <= 200) || Math.abs(d * 2 - Math.round(d * 2)) > 1e-9) fail('Diámetro no válido (50-200 cm, pasos de 0,5 cm)');
+  return d;
+}
 
 function save() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(store)); } catch { /* almacenamiento no disponible */ } }
 
@@ -28,8 +36,8 @@ function load(): Store {
   try { const raw = localStorage.getItem(STORAGE_KEY); if (raw) { store = JSON.parse(raw); return store!; } } catch { /* ignorar */ }
   const categoryNames = [...new Set(seedProducts.map(p => String(p.categoryId)))];
   const tables: DemoTable[] = [
-    ...[1, 2, 3, 4, 5, 6].map((n, i) => ({ id: `t-salon-${n}`, label: `Mesa ${n}`, zone: 'Salón', seats: n === 5 || n === 6 ? 6 : 4, shape: (n % 3 === 0 ? 'round' : 'square') as DemoTable['shape'], posX: 1 + (i % 3) * 2, posY: 1 + Math.floor(i / 3) * 2 })),
-    ...[1, 2, 3, 4].map((n, i) => ({ id: `t-terraza-${n}`, label: `Terraza ${n}`, zone: 'Terraza', seats: 2, shape: 'round' as const, posX: 1 + i * 2, posY: 1 })),
+    ...[1, 2, 3, 4, 5, 6].map((n, i) => { const shape = (n % 3 === 0 ? 'round' : 'square') as DemoTable['shape']; const seats = n === 5 || n === 6 ? 6 : 4; const diameterCm = shape === 'round' ? (seats <= 4 ? 90 : 120) : undefined; return { id: `t-salon-${n}`, label: `Mesa ${n}`, zone: 'Salón', seats, shape, diameterCm, seatsRecommended: diameterCm ? roundRecommended(diameterCm) : undefined, posX: 1 + (i % 3) * 2, posY: 1 + Math.floor(i / 3) * 2 }; }),
+    ...[1, 2, 3, 4].map((n, i) => ({ id: `t-terraza-${n}`, label: `Terraza ${n}`, zone: 'Terraza', seats: 2, shape: 'round' as const, diameterCm: 90, seatsRecommended: 4, posX: 1 + i * 2, posY: 1 })),
     ...[1, 2, 3].map((n, i) => ({ id: `t-barra-${n}`, label: `Barra ${n}`, zone: 'Barra', seats: 1, shape: 'bar' as const, posX: 1 + i, posY: 1 })),
   ];
   store = { products: seedProducts.map(p => ({ ...p, categoryName: String(p.categoryId) })), categories: categoryNames.map((name, i) => ({ id: name, name, sortOrder: i })), tables, orders: [], nextOrder: 104 };
@@ -98,17 +106,27 @@ function handle(s: Store, method: string, parts: string[], b: any): unknown {
   }
   // ---- Mesas ----
   if (root === 'tables') {
-    if (!id && method === 'GET') return s.tables.map(t => { const o = activeFor(t.id); return { ...t, activeOrder: o ? orderView(o) : null }; });
+    if (!id && method === 'GET') return s.tables.map(t => { const o = activeFor(t.id); return { ...t, seatsWarning: roundWarning(t), activeOrder: o ? orderView(o) : null }; });
     const checkLabel = (label: string, self?: string) => { if (s.tables.some(t => t.id !== self && t.label.toLocaleLowerCase('es') === label.toLocaleLowerCase('es'))) fail('Ya existe una mesa con ese nombre'); };
     if (!id && method === 'POST') {
       const label = String(b.label || '').trim() || fail('El nombre de la mesa es obligatorio'); checkLabel(label);
-      const t: DemoTable = { id: uid('table'), label, zone: b.zone?.trim() || 'Salón', seats: b.seats ?? 4, shape: b.shape ?? 'square', posX: b.posX ?? 0, posY: b.posY ?? 0 };
+      const shape = b.shape ?? 'square';
+      const seats = b.seats ?? 4;
+      if (!Number.isInteger(seats) || seats < 1 || seats > 20) fail('Número de comensales no válido (1-20)');
+      const diameterCm = shape === 'round' ? roundDiameter(b.diameterCm ?? 90) : undefined;
+      const seatsRecommended = diameterCm ? roundRecommended(diameterCm) : undefined;
+      const t: DemoTable = { id: uid('table'), label, zone: b.zone?.trim() || 'Salón', seats, shape, diameterCm, seatsRecommended, seatsWarning: roundWarning({ seats, seatsRecommended } as DemoTable), posX: b.posX ?? 0, posY: b.posY ?? 0 };
       s.tables.push(t); return t;
     }
     const t = s.tables.find(x => x.id === id) ?? fail('Mesa no encontrada');
     if (method === 'PATCH') {
       if (b.label !== undefined) { const label = String(b.label).trim() || fail('El nombre de la mesa no puede estar vacío'); checkLabel(label, t.id); t.label = label; const o = activeFor(t.id); if (o) o.tableLabel = label; }
       for (const k of ['zone', 'seats', 'shape', 'posX', 'posY'] as const) if (b[k] !== undefined) (t as any)[k] = b[k];
+      if (!Number.isInteger(t.seats) || t.seats < 1 || t.seats > 20) fail('Número de comensales no válido (1-20)');
+      const isRound = t.shape === 'round';
+      t.diameterCm = isRound ? roundDiameter(b.diameterCm ?? t.diameterCm ?? 90) : undefined;
+      t.seatsRecommended = isRound ? roundRecommended(t.diameterCm!) : undefined;
+      t.seatsWarning = roundWarning(t);
       return t;
     }
     if (method === 'DELETE') { if (activeFor(t.id)) fail('La mesa tiene una comanda abierta; cóbrala antes de eliminarla'); s.tables = s.tables.filter(x => x !== t); return { ok: true }; }

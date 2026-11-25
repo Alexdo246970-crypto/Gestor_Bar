@@ -12,6 +12,8 @@ export function tableState(t: DiningTable): TableState {
   return t.activeOrder.status === 'sent' ? 'sent' : 'open';
 }
 const minutesSince = (iso: string) => Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+const ROUND: [number, number][] = [[70, 3], [90, 4], [120, 8], [150, 10]];
+const roundRecommended = (d: number) => ROUND.reduce((best, item) => Math.abs(item[0] - d) < Math.abs(best[0] - d) ? item : best)[1];
 
 /** Plano de sala: cada mesa muestra en tiempo real el estado de su comanda. */
 export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenInPos: (table: { id: string; label: string }) => void }) {
@@ -28,6 +30,9 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
   const currentZone = zones.includes(zone) ? zone : zones[0];
   const zoneTables = tables.filter(t => t.zone === currentZone);
   const selected = tables.find(t => t.id === selectedId) || null;
+  const [draftSeats, setDraftSeats] = useState(4), [draftDiameter, setDraftDiameter] = useState(90);
+  const [editSeats, setEditSeats] = useState(4), [editDiameter, setEditDiameter] = useState(90);
+  useEffect(() => { setEditSeats(selected?.seats ?? 4); setEditDiameter(Number(selected?.diameterCm) || 90); }, [selected?.id]);
   const busy = tables.filter(t => t.activeOrder), openAmount = busy.reduce((s, t) => s + Number(t.activeOrder!.grossTotal) - Number(t.activeOrder!.paidTotal), 0);
 
   useEffect(() => {
@@ -47,15 +52,16 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
     setDraft({ posX, posY }); setSelectedId(null);
   }
   async function createTable(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault(); const f = new FormData(e.currentTarget);
+    e.preventDefault(); const f = new FormData(e.currentTarget); const shape = String(f.get('shape'));
     try {
-      const created = await request<DiningTable>('/tables', { method: 'POST', body: JSON.stringify({ label: String(f.get('label')), seats: Number(f.get('seats')), shape: String(f.get('shape')), zone: String(f.get('zone') || currentZone), posX: draft?.posX ?? 0, posY: draft?.posY ?? 0 }) });
+      const created = await request<DiningTable>('/tables', { method: 'POST', body: JSON.stringify({ label: String(f.get('label')), seats: Number(f.get('seats')), shape, diameterCm: shape === 'round' ? Number(f.get('diameterCm')) : undefined, zone: String(f.get('zone') || currentZone), posX: draft?.posX ?? 0, posY: draft?.posY ?? 0 }) });
       setDraft(null); await load(); setZone(created.zone); setSelectedId(created.id); setNotice(`${created.label} añadida al plano.`);
     } catch (err) { setError((err as Error).message); }
   }
   async function saveTable(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); if (!selected) return; const f = new FormData(e.currentTarget);
-    try { await request(`/tables/${selected.id}`, { method: 'PATCH', body: JSON.stringify({ label: String(f.get('label')), seats: Number(f.get('seats')), shape: String(f.get('shape')), zone: String(f.get('zone')) }) }); await load(); setZone(String(f.get('zone'))); setNotice('Mesa actualizada.'); }
+    const shape = String(f.get('shape'));
+    try { await request(`/tables/${selected.id}`, { method: 'PATCH', body: JSON.stringify({ label: String(f.get('label')), seats: Number(f.get('seats')), shape, diameterCm: shape === 'round' ? Number(f.get('diameterCm')) : undefined, zone: String(f.get('zone')) }) }); await load(); setZone(String(f.get('zone'))); setNotice('Mesa actualizada.'); }
     catch (err) { setError((err as Error).message); }
   }
   async function removeTable() {
@@ -104,8 +110,11 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
           <p className="eyebrow">NUEVA MESA</p><h3>Añadir mesa en {currentZone}</h3>
           <label>Nombre<input name="label" required autoFocus placeholder={`Mesa ${tables.length + 1}`} defaultValue={`${currentZone === 'Salón' ? 'Mesa' : currentZone} ${zoneTables.length + 1}`} /></label>
           <input type="hidden" name="zone" value={currentZone} />
-          <label>Plazas<input name="seats" type="number" min="1" step="1" defaultValue={4} required /></label>
           <label>Forma<select name="shape" defaultValue="square"><option value="square">Cuadrada</option><option value="round">Redonda</option><option value="bar">Barra / taburete</option></select></label>
+          <label>Diámetro redonda (cm)<input name="diameterCm" type="number" min="50" max="200" step="0.5" list="round-diameters" value={draftDiameter} onChange={e => { const v = Number(e.target.value); setDraftDiameter(v); setDraftSeats(roundRecommended(v)); }} /></label>
+          <datalist id="round-diameters">{ROUND.map(([d, seats]) => <option key={d} value={d}>{seats} plazas recomendadas</option>)}</datalist>
+          <label>Plazas<input name="seats" type="number" min="1" max="20" step="1" value={draftSeats} onChange={e => setDraftSeats(Number(e.target.value))} required /></label>
+          <small className="measure-note">Catálogo: 70→3, 90→4, 120→8, 150→10. Medidas libres 50-200 cm; cambia las plazas si lo necesitas.</small>
           <div className="modal-actions"><button type="button" className="secondary" onClick={() => setDraft(null)}>Cancelar</button><button className="primary">Añadir mesa</button></div>
         </form>
         : !selected ? <div className="empty">{editMode ? <>Arrastra una mesa para moverla, o toca una casilla vacía para crear una nueva.<br /><br /><button className="secondary" onClick={() => setDraft(nextFreeCell())}>＋ Añadir mesa</button></> : 'Selecciona una mesa del plano.'}</div>
@@ -114,14 +123,19 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
           <p className="modal-description">Para moverla, arrástrala o toca una casilla vacía del plano.</p>
           <label>Nombre<input name="label" required defaultValue={selected.label} /></label>
           <label>Zona<input name="zone" required defaultValue={selected.zone} list="zones-list" /><datalist id="zones-list">{zones.map(z => <option key={z} value={z} />)}</datalist></label>
-          <label>Plazas<input name="seats" type="number" min="1" step="1" defaultValue={selected.seats} required /></label>
           <label>Forma<select name="shape" defaultValue={selected.shape}><option value="square">Cuadrada</option><option value="round">Redonda</option><option value="bar">Barra / taburete</option></select></label>
+          <label>Diámetro redonda (cm)<input name="diameterCm" type="number" min="50" max="200" step="0.5" list="round-diameters-edit" value={editDiameter} onChange={e => { const v = Number(e.target.value); setEditDiameter(v); setEditSeats(roundRecommended(v)); }} /></label>
+          <datalist id="round-diameters-edit">{ROUND.map(([d, seats]) => <option key={d} value={d}>{seats} plazas recomendadas</option>)}</datalist>
+          <label>Plazas<input name="seats" type="number" min="1" max="20" step="1" value={editSeats} onChange={e => setEditSeats(Number(e.target.value))} required /></label>
+          <small className="measure-note">Recomendación actual: {roundRecommended(editDiameter)} plazas. Cambiarla es permitido; se avisará si te desvías más de 1.</small>
           <div className="modal-actions"><button type="button" className="remove-button" onClick={() => void removeTable()}>Eliminar mesa</button><button className="primary">Guardar</button></div>
         </form>
         : <div className="table-detail">
           <p className="eyebrow">{selected.zone.toUpperCase()} · {selected.seats} PLAZAS</p>
           <h3>{selected.label}</h3>
           <span className={`state-pill ${tableState(selected)}`}>{STATE_LABEL[tableState(selected)]}</span>
+          {selected.diameterCm != null && <p className="measure-info">Ø {Number(selected.diameterCm).toFixed(1)} cm · {selected.seatsRecommended} plazas recomendadas</p>}
+          {selected.seatsWarning && <p className="measure-warning">Capacidad personalizada: se desvía más de 1 plaza de la recomendación para ese diámetro.</p>}
           {!selected.activeOrder ? <>
             <p className="modal-description">Mesa libre. Abre una comanda y añade los productos desde la carta.</p>
             <button className="primary wide" onClick={() => onOpenInPos({ id: selected.id, label: selected.label })}>Abrir comanda <span>→</span></button>
