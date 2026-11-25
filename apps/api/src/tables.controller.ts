@@ -38,8 +38,40 @@ export class TablesController {
           'paidTotal',(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.tenant_id=o.tenant_id AND p.order_id=o.id),
           'lineCount',(SELECT count(*)::int FROM order_lines l WHERE l.tenant_id=o.tenant_id AND l.order_id=o.id)) END "activeOrder"
       FROM dining_tables t
-      LEFT JOIN orders o ON o.tenant_id=t.tenant_id AND o.table_id=t.id AND o.status IN ('open','sent')
+      LEFT JOIN orders o ON o.tenant_id=t.tenant_id AND o.table_id=t.id AND o.status IN ('open','sent','pending_approval')
       WHERE t.tenant_id=$1 AND t.active ORDER BY t.zone,t.pos_y,t.pos_x,t.label`, [s.tenantId])).rows);
+  }
+
+  @Get('qr-settings') async qrSettings(@Req() req: AuthRequest) {
+    const s = this.session(req, ['admin', 'manager']);
+    return this.db.tenant(req, async c => {
+      await c.query('INSERT INTO tenant_qr_settings(tenant_id) VALUES($1) ON CONFLICT DO NOTHING', [s.tenantId]);
+      return (await c.query(`SELECT approval_required "approvalRequired",max_order_lines "maxOrderLines",
+        cooldown_seconds "cooldownSeconds" FROM tenant_qr_settings WHERE tenant_id=$1`, [s.tenantId])).rows[0];
+    });
+  }
+
+  @Patch('qr-settings') async updateQrSettings(@Req() req: AuthRequest, @Body() b: { approvalRequired: boolean; maxOrderLines: number; cooldownSeconds: number }) {
+    const s = this.session(req, ['admin', 'manager']);
+    if (typeof b?.approvalRequired !== 'boolean' || !Number.isInteger(b.maxOrderLines) || b.maxOrderLines < 1 || b.maxOrderLines > 20 ||
+        !Number.isInteger(b.cooldownSeconds) || b.cooldownSeconds < 0 || b.cooldownSeconds > 3600) {
+      throw new BadRequestException('Revisa la aprobación, el máximo de líneas (1–20) y el límite (0–3600 segundos)');
+    }
+    return this.db.tenant(req, async c => (await c.query(`INSERT INTO tenant_qr_settings(tenant_id,approval_required,max_order_lines,cooldown_seconds)
+      VALUES($1,$2,$3,$4) ON CONFLICT(tenant_id) DO UPDATE SET approval_required=excluded.approval_required,
+      max_order_lines=excluded.max_order_lines,cooldown_seconds=excluded.cooldown_seconds,updated_at=now()
+      RETURNING approval_required "approvalRequired",max_order_lines "maxOrderLines",cooldown_seconds "cooldownSeconds"`,
+      [s.tenantId,b.approvalRequired,b.maxOrderLines,b.cooldownSeconds])).rows[0]);
+  }
+
+  @Post(':id/qr-token') async rotateQrToken(@Req() req: AuthRequest, @Param('id') id: string) {
+    const s = this.session(req, ['admin', 'manager']);
+    return this.db.tenant(req, async c => {
+      const table = await c.query(`UPDATE dining_tables SET qr_token=encode(gen_random_bytes(24),'hex')
+        WHERE tenant_id=$1 AND id=$2 AND active RETURNING (tenant_id::text||'.'||qr_token) "qrToken",label`, [s.tenantId,id]);
+      if (!table.rowCount) throw new BadRequestException('Mesa no encontrada');
+      return table.rows[0];
+    });
   }
 
   @Post() async create(@Req() req: AuthRequest, @Body() b: TableBody) {
@@ -65,7 +97,7 @@ export class TablesController {
           [s.tenantId, id, b.label?.trim() ?? null, b.zone?.trim() || null, b.seats ?? null, b.shape ?? null, b.posX ?? null, b.posY ?? null]);
         if (!r.rowCount) throw new BadRequestException('Mesa no encontrada');
         // Mantener el nombre visible de la comanda abierta sincronizado con la mesa.
-        if (b.label) await c.query("UPDATE orders SET table_label=$3 WHERE tenant_id=$1 AND table_id=$2 AND status IN ('open','sent')", [s.tenantId, id, r.rows[0].label]);
+        if (b.label) await c.query("UPDATE orders SET table_label=$3 WHERE tenant_id=$1 AND table_id=$2 AND status IN ('open','sent','pending_approval')", [s.tenantId, id, r.rows[0].label]);
         return r.rows[0];
       } catch (e) { this.duplicate(e); }
     });
@@ -74,7 +106,7 @@ export class TablesController {
   @Delete(':id') async remove(@Req() req: AuthRequest, @Param('id') id: string) {
     const s = this.session(req, ['admin', 'manager']);
     return this.db.tenant(req, async c => {
-      const busy = await c.query("SELECT 1 FROM orders WHERE tenant_id=$1 AND table_id=$2 AND status IN ('open','sent')", [s.tenantId, id]);
+      const busy = await c.query("SELECT 1 FROM orders WHERE tenant_id=$1 AND table_id=$2 AND status IN ('open','sent','pending_approval')", [s.tenantId, id]);
       if (busy.rowCount) throw new BadRequestException('La mesa tiene una comanda abierta; cóbrala antes de eliminarla');
       const r = await c.query('UPDATE dining_tables SET active=false WHERE tenant_id=$1 AND id=$2 AND active', [s.tenantId, id]);
       if (!r.rowCount) throw new BadRequestException('Mesa no encontrada');
