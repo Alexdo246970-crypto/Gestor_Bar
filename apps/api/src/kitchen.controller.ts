@@ -64,14 +64,11 @@ export class KitchenController {
   @Get('kitchen/orders') async orders(@Req() req: AuthRequest) {
     const s = this.session(req);
     const orders=await this.db.tenant(req, async c => (await c.query(`SELECT o.id,o.order_number "orderNumber",o.table_label "tableLabel",o.channel,o.opened_at "openedAt",
-      json_agg(json_build_object('id',l.id,'name',l.product_name,'quantity',l.quantity,'kitchenStatus',l.kitchen_status,'modifications',coalesce((SELECT json_agg(json_build_object('action',m.action,'ingredient',i.name)) FROM order_line_modifications m JOIN ingredients i ON i.tenant_id=m.tenant_id AND i.id=m.ingredient_id WHERE m.tenant_id=l.tenant_id AND m.order_line_id=l.id),'[]'::json)) ORDER BY l.id) FILTER (WHERE l.id IS NOT NULL) lines
-      FROM orders o LEFT JOIN order_lines l ON l.tenant_id=o.tenant_id AND l.order_id=o.id WHERE o.tenant_id=$1 AND o.status='sent'
-      GROUP BY o.id HAVING bool_or(l.kitchen_status<>'ready') ORDER BY o.opened_at`, [s.tenantId])).rows);
     const settings=await this.db.tenant(req,c=>this.readSettings(c,s.tenantId));
     if(settings.ticketAutoprint&&settings.printerMode==='network'&&settings.printerHost){
       for(const order of orders){
         const roundKey=await this.db.tenant(req,async c=>(await c.query(`SELECT md5(coalesce(string_agg(l.id::text||':'||l.quantity::text,',' ORDER BY l.id),'')) value FROM order_lines l WHERE l.tenant_id=$1 AND l.order_id=$2`,[s.tenantId,order.id])).rows[0].value);
-        try{await this.sendOrderToPrinter(req,order.id,`${roundKey}:auto`)}catch{/* La comanda sigue disponible en la tableta aunque falle la impresora. */}
+        try{await this.sendOrderToPrinter(req,order.id,`${roundKey}:auto`)}catch{/* La comanda sigue visible en tableta aunque falle la impresora. */}
       }
     }
     return orders;

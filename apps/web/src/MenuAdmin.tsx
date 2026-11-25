@@ -32,7 +32,7 @@ export function MenuAdmin({ onChanged }: { onChanged: () => void }) {
     try {
       let categoryId = String(f.get('categoryId') || '') || null;
       if (newCategory) { const name = String(f.get('newCategory') || '').trim(); if (!name) throw new Error('Escribe el nombre de la nueva categoría'); categoryId = (await request<Category>('/categories', { method: 'POST', body: JSON.stringify({ name, sortOrder: categories.length }) })).id; }
-      const payload = { name: String(f.get('name')).trim(), description: String(f.get('description') || '').trim() || null, categoryId, vatRate: vat, priceNet: Math.round(price / (1 + vat / 100) * 10000) / 10000 };
+      const payload = { name: String(f.get('name')).trim(), description: String(f.get('description') || '').trim() || null, categoryId, vatRate: vat, priceNet: Math.round(price / (1 + vat / 100) * 10000) / 10000, kitchenStation:String(f.get('kitchenStation')||'kitchen') };
       if (editing.mode === 'new') await request('/products', { method: 'POST', body: JSON.stringify(payload) });
       else await request(`/products/${editing.product.id}`, { method: 'PATCH', body: JSON.stringify(payload) });
       setNotice(editing.mode === 'new' ? `«${payload.name}» añadido a la carta.` : `«${payload.name}» actualizado.`);
@@ -75,6 +75,7 @@ export function MenuAdmin({ onChanged }: { onChanged: () => void }) {
         <h3>{editing.mode === 'new' ? 'Añadir a la carta' : editing.product.name}</h3>
         <label>Nombre<input name="name" required autoFocus defaultValue={editing.mode === 'edit' ? editing.product.name : ''} placeholder="Ej. Calamares a la romana" /></label>
         <label>Descripción (opcional)<input name="description" defaultValue={editing.mode === 'edit' ? editing.product.description || '' : ''} /></label>
+        <label>Partida<select name="kitchenStation" defaultValue={editing.mode === 'edit' ? (editing.product as any).kitchenStation || 'kitchen' : 'kitchen'}><option value="kitchen">Cocina</option><option value="bar">Barra</option></select></label>
         <label>Categoría{!newCategory
           ? <select name="categoryId" defaultValue={editing.mode === 'edit' ? editing.product.categoryId || '' : categories[0]?.id || ''}><option value="">Sin categoría</option>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
           : <input name="newCategory" placeholder="Nombre de la nueva categoría" autoFocus />}</label>
