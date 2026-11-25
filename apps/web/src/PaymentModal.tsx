@@ -16,15 +16,17 @@ export function PaymentModal({ orderId, onClose, onPaid }: { orderId: string; on
 
   const total = Number(order?.grossTotal || 0), paidSoFar = Number(order?.paidTotal || 0), remaining = Math.max(0, Math.round((total - paidSoFar) * 100) / 100);
   const amountValue = Number(amount), tenderedValue = tendered === '' ? amountValue : Number(tendered);
-  const change = method === 'cash' && Number.isFinite(tenderedValue) ? tenderedValue - amountValue : 0;
-  const invalid = !order || !(amountValue > 0) || amountValue > remaining + 0.001 || (method === 'cash' && !(tenderedValue + 0.001 >= amountValue));
+  // En efectivo, si se teclea más de lo pendiente se entiende como dinero entregado: se cobra lo pendiente y el resto es cambio.
+  const overpay = method === 'cash' && amountValue > remaining + 0.001, charge = overpay ? remaining : amountValue;
+  const change = method === 'cash' && Number.isFinite(tenderedValue) ? Math.round((tenderedValue - charge) * 100) / 100 : 0;
+  const invalid = !order || !(charge > 0) || charge > remaining + 0.001 || (method === 'cash' && !(tenderedValue + 0.001 >= charge));
 
   async function pay() {
     if (invalid || saving) return;
     setSaving(true); setError('');
     try {
-      const result = await request<{ closed: boolean; change: number | null }>(`/orders/${orderId}/payments`, { method: 'POST', body: JSON.stringify(method === 'cash' ? { method, amount: amountValue, cashTendered: tenderedValue } : { method, amount: amountValue, cardReference: reference || undefined }) });
-      setDone({ closed: result.closed, change: result.change, method, amount: amountValue }); setReference('');
+      const result = await request<{ closed: boolean; change: number | null }>(`/orders/${orderId}/payments`, { method: 'POST', body: JSON.stringify(method === 'cash' ? { method, amount: charge, cashTendered: tenderedValue } : { method, amount: charge, cardReference: reference || undefined }) });
+      setDone({ closed: result.closed, change: result.change ?? (method === 'cash' ? change : null), method, amount: charge }); setReference('');
       onPaid(result.closed);
       await load();
     } catch (e) { setError((e as Error).message); } finally { setSaving(false); }
@@ -50,18 +52,19 @@ export function PaymentModal({ orderId, onClose, onPaid }: { orderId: string; on
           <button type="button" role="radio" aria-checked={method === 'card'} className={method === 'card' ? 'selected' : ''} onClick={() => setMethod('card')}><span>💳</span>Tarjeta<small>Datáfono TPV</small></button>
           <button type="button" role="radio" aria-checked={method === 'cash'} className={method === 'cash' ? 'selected' : ''} onClick={() => setMethod('cash')}><span>💶</span>Efectivo<small>Metálico</small></button>
         </div>
-        <label>Importe a cobrar (€)<input type="number" min="0.01" step="0.01" max={remaining} value={amount} onChange={e => setAmount(e.target.value)} /></label>
+        <label>Importe a cobrar (€)<input type="number" min="0.01" step="0.01" max={method === 'cash' ? undefined : remaining} value={amount} onChange={e => setAmount(e.target.value)} /></label>
         <div className="quick-row"><button type="button" onClick={() => setAmount(remaining.toFixed(2))}>Todo</button><button type="button" onClick={() => setAmount((Math.round(remaining / 2 * 100) / 100).toFixed(2))}>Mitad</button><button type="button" onClick={() => setAmount((Math.round(remaining / 3 * 100) / 100).toFixed(2))}>1/3</button></div>
         {method === 'cash' ? <>
           <label>Efectivo entregado (€)<input type="number" min="0" step="0.01" placeholder={amountValue > 0 ? amountValue.toFixed(2) : ''} value={tendered} onChange={e => setTendered(e.target.value)} /></label>
           <div className="quick-row">{QUICK_CASH.map(v => <button type="button" key={v} onClick={() => setTendered(String(v))}>{v} €</button>)}<button type="button" onClick={() => setTendered('')}>Exacto</button></div>
-          <div className={`change-box ${change < -0.001 ? 'short' : ''}`}><span>{change < -0.001 ? 'Falta' : 'Cambio'}</span><strong>{euro(Math.abs(change))}</strong></div>
+          {overpay && tendered === '' && <p className="modal-description">Has puesto más de lo pendiente: se cobran {euro(charge)} y el resto es el cambio.</p>}
+          <div className={`change-box ${change < -0.001 ? 'short' : ''}`}><span>{change < -0.001 ? 'Falta por entregar' : 'Cambio a devolver'}</span><strong>{euro(Math.abs(change))}</strong></div>
         </> : <>
           <p className="modal-description">Introduce el importe en el datáfono, espera la aprobación y confirma aquí.</p>
           <label>Referencia de la operación TPV (opcional)<input value={reference} maxLength={40} onChange={e => setReference(e.target.value)} placeholder="Ej. autorización 123456" /></label>
         </>}
         {error && <p className="error">{error}</p>}
-        <div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button type="button" className="primary" disabled={invalid || saving} onClick={() => void pay()}>{saving ? 'Cobrando…' : method === 'card' ? `Cobrar ${euro(amountValue)} con tarjeta` : `Cobrar ${euro(amountValue)} en efectivo`}</button></div>
+        <div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button type="button" className="primary" disabled={invalid || saving} onClick={() => void pay()}>{saving ? 'Cobrando…' : method === 'card' ? `Cobrar ${euro(charge)} con tarjeta` : change > 0.001 ? `Cobrar ${euro(charge)} y devolver ${euro(change)}` : `Cobrar ${euro(charge)} en efectivo`}</button></div>
       </>}
       {order && remaining <= 0 && <div className="modal-actions"><button type="button" className="primary" onClick={onClose}>Hecho</button></div>}
       {!order && error && <p className="error">{error}</p>}

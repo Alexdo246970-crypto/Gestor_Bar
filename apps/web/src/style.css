@@ -99,3 +99,6 @@
 .loss-bars{display:flex;flex-direction:column;gap:7px}.loss-bar{display:grid;grid-template-columns:100px 1fr 80px;gap:8px;align-items:center;font-size:11px}.loss-bar .bar{height:9px;background:#f0d6cf;border-radius:5px;overflow:hidden}.loss-bar .bar i{display:block;height:100%;background:#c8705b}.loss-alert{background:#fff1ef;border:1px solid #edc0b6;border-radius:9px;padding:10px 14px;margin-bottom:12px;color:#9a4a38;font-size:12px}
 
 .floor-size{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;margin:0 0 12px;font-size:11px;color:#526057}.floor-size>span{font-weight:600}.floor-size div{display:flex;align-items:center;gap:6px}.floor-size strong{min-width:64px;text-align:center;font:700 12px Manrope}.floor-size button{padding:4px 11px;min-width:32px}
+.stock-remove{border:0;background:none;color:#b3261e;font-size:11px;font-weight:600;padding:6px 0 0;cursor:pointer;text-align:left}.stock-remove:hover{text-decoration:underline}
+.kitchen-order-actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px;margin:10px 0 6px}.kitchen-order-actions button{padding:10px 8px;font-weight:700}
+.pay-result strong{font-size:22px}

@@ -12,6 +12,9 @@ type KitchenSettings = {
   ticketWidth: 58 | 80;
 };
 
+/** Comandas que ve cocina: enviadas, o ya cobradas en el TPV en las últimas 12 h (el cobro en barra no debe saltarse la cocina). */
+const KITCHEN_VISIBLE = `(o.status='sent' OR (o.status='paid' AND o.opened_at > now() - interval '12 hours'))`;
+
 @ApiTags('kitchen')
 @Controller()
 export class KitchenController {
@@ -65,7 +68,7 @@ export class KitchenController {
     const s = this.session(req);
     const orders=await this.db.tenant(req, async c => (await c.query(`SELECT o.id,o.order_number "orderNumber",o.table_label "tableLabel",o.channel,o.opened_at "openedAt",o.customer_preferences "customerPreferences",
       json_agg(json_build_object('id',l.id,'name',l.product_name,'quantity',l.quantity,'kitchenStatus',l.kitchen_status,'station',coalesce(p.kitchen_station,'kitchen'),'modifications',coalesce((SELECT json_agg(json_build_object('action',m.action,'ingredient',i.name)) FROM order_line_modifications m JOIN ingredients i ON i.tenant_id=m.tenant_id AND i.id=m.ingredient_id WHERE m.tenant_id=l.tenant_id AND m.order_line_id=l.id),'[]'::json)) ORDER BY l.id) FILTER (WHERE l.id IS NOT NULL) lines
-      FROM orders o LEFT JOIN order_lines l ON l.tenant_id=o.tenant_id AND l.order_id=o.id LEFT JOIN products p ON p.tenant_id=l.tenant_id AND p.id=l.product_id WHERE o.tenant_id=$1 AND o.status='sent'
+      FROM orders o LEFT JOIN order_lines l ON l.tenant_id=o.tenant_id AND l.order_id=o.id AND l.cancelled_at IS NULL LEFT JOIN products p ON p.tenant_id=l.tenant_id AND p.id=l.product_id WHERE o.tenant_id=$1 AND ${KITCHEN_VISIBLE}
       GROUP BY o.id HAVING bool_or(l.kitchen_status<>'ready') ORDER BY o.opened_at`, [s.tenantId])).rows);
     const settings=await this.db.tenant(req,c=>this.readSettings(c,s.tenantId));
     if(settings.ticketAutoprint&&settings.printerMode==='network'&&settings.printerHost){
@@ -85,7 +88,7 @@ export class KitchenController {
     const s = this.session(req);
     if (!['received', 'preparing', 'ready'].includes(b?.status)) throw new BadRequestException('Estado de cocina no válido');
     return this.db.tenant(req, async c => {
-      const r = await c.query("UPDATE order_lines l SET kitchen_status=$3 FROM orders o WHERE l.tenant_id=$1 AND l.id=$2 AND o.tenant_id=l.tenant_id AND o.id=l.order_id AND o.status='sent' RETURNING l.id,l.kitchen_status",
+      const r = await c.query(`UPDATE order_lines l SET kitchen_status=$3 FROM orders o WHERE l.tenant_id=$1 AND l.id=$2 AND o.tenant_id=l.tenant_id AND o.id=l.order_id AND ${KITCHEN_VISIBLE} RETURNING l.id,l.kitchen_status`,
         [s.tenantId, id, b.status]);
       if (!r.rowCount) throw new BadRequestException('Plato de cocina no encontrado');
       return r.rows[0];

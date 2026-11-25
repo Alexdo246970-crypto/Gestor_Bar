@@ -4,7 +4,8 @@ import type { Product } from '@bar/contracts';
 import { DEFAULT_COLS, DEFAULT_ROWS, Rect, freeSpot, joinedRect } from './floorLayout';
 
 type DemoProduct = Product & { description?: string | null; categoryName?: string | null; [extra: string]: unknown };
-type DemoLine = { id: string; productId: string; productName: string; quantity: number; lineGross: number; cancelledAt?: string; cancellationReason?: string; addedBy?: string };
+type KitchenStatus = 'received' | 'preparing' | 'ready';
+type DemoLine = { id: string; productId: string; productName: string; quantity: number; lineGross: number; kitchenStatus?: KitchenStatus; modifications?: { action: 'remove' | 'add'; ingredient: string }[]; cancelledAt?: string; cancellationReason?: string; addedBy?: string };
 type DemoPayment = { id: string; method: 'cash' | 'card'; amount: number; cashTendered: number | null; changeGiven: number | null; cardReference: string | null; paidAt: string };
 type DemoOrder = { id: string; orderNumber: number; status: 'open' | 'sent' | 'paid'; channel: string; tableId: string | null; tableLabel: string | null; openedAt: string; lines: DemoLine[]; payments: DemoPayment[] };
 type JoinSnapshot = { joinedId: string; joinedZone?: string; widthCm?: number; heightCm?: number; diameterCm?: number; label: string; seats: number; shape: DemoTable['shape']; spanX: number; spanY: number; offX: number; offY: number; joinedOffX: number; joinedOffY: number };
@@ -12,7 +13,7 @@ type DemoTable = { id: string; label: string; zone: string; seats: number; shape
 type DemoDailyMenu = { id: string; date: string; name: string; priceNet: number; vatRate: number; products: { id: string; name: string }[] };
 type DemoIngredient = { id: string; name: string; unit: string; quantityPerUnit?: number };
 type DemoRoom = { id: string; name: string; widthCm: number; heightCm: number; sortOrder: number; active: boolean };
-type Store = { rooms?: DemoRoom[]; products: DemoProduct[]; categories: { id: string; name: string; sortOrder: number }[]; tables: DemoTable[]; orders: DemoOrder[]; dailyMenus: DemoDailyMenu[]; staff: { id: string; email: string; fullName: string; role: string; active: boolean }[]; activity: { id: string; eventType: string; targetId: string | null; details: Record<string, unknown>; createdAt: string; actorName: string | null }[]; tenant: { name: string; slug: string; timezone: string; currency: string }; nextOrder: number };
+type Store = { qrSettings?: { approvalRequired: boolean; maxOrderLines: number; cooldownSeconds: number }; kitchenSettings?: Record<string, unknown>; rooms?: DemoRoom[]; products: DemoProduct[]; categories: { id: string; name: string; sortOrder: number }[]; tables: DemoTable[]; orders: DemoOrder[]; dailyMenus: DemoDailyMenu[]; staff: { id: string; email: string; fullName: string; role: string; active: boolean }[]; activity: { id: string; eventType: string; targetId: string | null; details: Record<string, unknown>; createdAt: string; actorName: string | null }[]; tenant: { name: string; slug: string; timezone: string; currency: string }; nextOrder: number };
 
 const STORAGE_KEY = 'barraos-demo-v2';
 let seedProducts: DemoProduct[] = [];
@@ -104,9 +105,17 @@ function load(): Store {
   return store;
 }
 
-function addLine(order: DemoOrder, productId: string, quantity: number, extrasNet: number) {
+function addLine(order: DemoOrder, productId: string, quantity: number, extrasNet: number, removeIds: string[] = [], addedIds: string[] = []) {
   const p = load().products.find(x => x.id === productId && x.active !== false) ?? fail('Producto no disponible');
-  order.lines.push({ id: uid('line'), productId, productName: p.name, quantity, lineGross: round((Number(p.priceNet) + extrasNet) * (1 + Number(p.vatRate) / 100) * quantity) });
+  const name = (id: string) => seedIngredients.find(i => i.id === id)?.name ?? id;
+  const modifications = [...removeIds.map(id => ({ action: 'remove' as const, ingredient: name(id) })), ...addedIds.map(id => ({ action: 'add' as const, ingredient: name(id) }))];
+  order.lines.push({ id: uid('line'), productId, productName: p.name, quantity, lineGross: round((Number(p.priceNet) + extrasNet) * (1 + Number(p.vatRate) / 100) * quantity), kitchenStatus: 'received', modifications });
+}
+/** Cocina ve las comandas enviadas y las cobradas en el TPV en las últimas 12 h mientras tengan platos sin terminar. */
+const kitchenVisible = (o: DemoOrder) => o.status === 'sent' || (o.status === 'paid' && Date.now() - new Date(o.openedAt).getTime() < 12 * 3600000);
+function stationOf(productId: string) {
+  const p = load().products.find(x => x.id === productId), key = String(p?.categoryName ?? p?.categoryId ?? '').toLocaleLowerCase('es');
+  return key.includes('bebida') || key.includes('café') || key.includes('cafe') ? 'bar' : 'kitchen';
 }
 
 function orderView(o: DemoOrder) { return { ...o, grossTotal: gross(o), paidTotal: paid(o), lineCount: o.lines.filter(l => !l.cancelledAt).length }; }
@@ -227,6 +236,20 @@ function handle(s: Store, method: string, parts: string[], b: any, query: URLSea
     }
     if (method === 'DELETE') { p.active = false; return { ok: true }; }
   }
+  // ---- Cocina ----
+  if (root === 'kitchen') {
+    if (id === 'orders' && method === 'GET') return s.orders.filter(kitchenVisible).map(o => ({
+      id: o.id, orderNumber: o.orderNumber, tableLabel: o.tableLabel, channel: o.channel, openedAt: o.openedAt, customerPreferences: null,
+      lines: o.lines.filter(l => !l.cancelledAt).map(l => ({ id: l.id, name: l.productName, quantity: l.quantity, kitchenStatus: l.kitchenStatus ?? 'received', station: stationOf(l.productId), modifications: l.modifications ?? [] })),
+    })).filter(o => o.lines.some(l => l.kitchenStatus !== 'ready')).sort((a, b) => a.openedAt.localeCompare(b.openedAt));
+    if (id === 'lines' && parts[3] === 'status' && method === 'PATCH') {
+      if (!['received', 'preparing', 'ready'].includes(b.status)) fail('Estado de cocina no válido');
+      const line = s.orders.filter(kitchenVisible).flatMap(o => o.lines).find(l => l.id === action) ?? fail('Plato de cocina no encontrado');
+      line.kitchenStatus = b.status; return { id: line.id, kitchen_status: line.kitchenStatus };
+    }
+    if (id === 'settings' && method === 'GET') return s.kitchenSettings ?? { printerName: '', printerMode: 'browser', printerHost: '', printerPort: 9100, ticketAutoprint: false, ticketWidth: 80 };
+    if (id === 'settings' && method === 'PATCH') { s.kitchenSettings = { ...(s.kitchenSettings ?? {}), ...b }; return s.kitchenSettings; }
+  }
   // ---- Salas ----
   if (root === 'rooms') {
     const rooms = demoRooms(s);
@@ -274,6 +297,8 @@ function handle(s: Store, method: string, parts: string[], b: any, query: URLSea
       s.tables.push(t);
       return tableView(t);
     }
+    if (id === 'qr-settings' && method === 'GET') return s.qrSettings ?? { approvalRequired: false, maxOrderLines: 20, cooldownSeconds: 120 };
+    if (id === 'qr-settings' && method === 'PATCH') { s.qrSettings = { approvalRequired: !!b.approvalRequired, maxOrderLines: Number(b.maxOrderLines), cooldownSeconds: Number(b.cooldownSeconds) }; return s.qrSettings; }
     const t = s.tables.find(x => x.id === id && x.active !== false) ?? fail('Mesa no encontrada');
     if (action === 'join' && method === 'POST') {
       const o = s.tables.find(x => x.id === b.withId && x.id !== t.id && x.active !== false) ?? fail('Elige otra mesa para unir');
@@ -355,7 +380,7 @@ function handle(s: Store, method: string, parts: string[], b: any, query: URLSea
     if (action === 'lines' && method === 'POST') {
       if (!['open', 'sent'].includes(o.status)) fail('Pedido inexistente, cerrado o no modificable');
       if (!b.productId || !(b.quantity > 0)) fail('Producto y cantidad positiva requeridos');
-      addLine(o, b.productId, b.quantity, (b.addedIngredients || []).reduce((sum: number, i: any) => sum + Number(i.extraPriceNet || 0), 0));
+      addLine(o, b.productId, b.quantity, (b.addedIngredients || []).reduce((sum: number, i: any) => sum + Number(i.extraPriceNet || 0), 0), b.removeIngredientIds || [], (b.addedIngredients || []).map((i: any) => i.ingredientId));
       if (b.unitPriceGross !== undefined) {
         const price = Number(b.unitPriceGross);
         if (!Number.isFinite(price) || price < 0) fail('Precio ajustado no válido');

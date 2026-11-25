@@ -55,7 +55,10 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
   const [qrSettings,setQrSettings]=useState({approvalRequired:false,maxOrderLines:20,cooldownSeconds:120}),[showQrSettings,setShowQrSettings]=useState(false);
   const [roomForm,setRoomForm]=useState<{mode:'create'|'edit';id?:string;name:string;widthCm:number;heightCm:number;sortOrder:number}|null>(null);
   const [visibleStates,setVisibleStates]=useState<TableState[]>(['free', 'open', 'sent', 'partial']);
-  const [lastMove,setLastMove]=useState<{id:string;posX:number;posY:number}|null>(null);
+  /** Historial para «Deshacer»: guarda datos (no funciones) para ejecutarse siempre con el estado actual del plano. */
+  type UndoStep = { label: string } & ({ kind: 'move'; id: string; posX: number; posY: number } | { kind: 'join'; joinedId: string } | { kind: 'split'; id: string; withId: string } | { kind: 'create'; id: string });
+  const [undoStack,setUndoStack]=useState<UndoStep[]>([]), [undoing,setUndoing]=useState(false);
+  const pushUndo = (step: UndoStep) => setUndoStack(stack => [...stack.slice(-19), step]);
   const pinch = useRef<number | null>(null);
 
   async function load() {
@@ -147,17 +150,17 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
   }, [selectedId, selected?.activeOrder?.id, selected?.activeOrder?.grossTotal, selected?.activeOrder?.paidTotal]);
 
   async function move(id: string, posX: number, posY: number, record = true) {
-    const t = tables.find(x => x.id === id); if (!t) return;
-    const w = cellsX(t), h = cellsY(t);
-    if (posX + w > floorCols || posY + h > floorRows) { setError('La mesa no cabe en esa posición del plano.'); return; }
-    if (zoneTables.some(o => o.id !== id && o.posX < posX + w && posX < o.posX + cellsX(o) && o.posY < posY + h && posY < o.posY + cellsY(o))) { setError('Hay otra mesa en ese hueco.'); return; }
-    const previous = { id, posX: t.posX, posY: t.posY };
+    const t = tables.find(x => x.id === id); if (!t) { setError('La mesa ya no está en el plano.'); return false; }
+    const w = cellsX(t), h = cellsY(t), zoneOf = tables.filter(o => o.zone === t.zone);
+    if (posX + w > floorCols || posY + h > floorRows) { setError('La mesa no cabe en esa posición del plano.'); return false; }
+    if (zoneOf.some(o => o.id !== id && o.posX < posX + w && posX < o.posX + cellsX(o) && o.posY < posY + h && posY < o.posY + cellsY(o))) { setError('Hay otra mesa en ese hueco.'); return false; }
+    const previous = { posX: t.posX, posY: t.posY };
     setTables(current => current.map(x => x.id === id ? { ...x, posX, posY } : x));
     try {
       await request(`/tables/${id}`, { method: 'PATCH', body: JSON.stringify({ posX, posY }) });
-      if (record) { setLastMove(previous); setNotice(`${t.label} movida a la casilla ${posX + 1}, ${posY + 1}.`); }
-      else setLastMove(null);
-    } catch (e) { setError((e as Error).message); void load(); }
+      if (record) { pushUndo({ kind: 'move', id, ...previous, label: `mover ${t.label}` }); setNotice(`${t.label} movida a la casilla ${posX + 1}, ${posY + 1}.`); }
+      return true;
+    } catch (e) { setError((e as Error).message); void load(); return false; }
   }
   function clickCell(posX: number, posY: number) {
     if (!editMode) { setSelectedId(null); return; }
@@ -175,10 +178,27 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
     if (pinch.current) setZoom(z => Math.min(3, Math.max(0.5, Math.round((z * current / pinch.current!) * 100) / 100)));
     pinch.current = current;
   }
-  function undoMove() {
-    if (!lastMove) return;
-    void move(lastMove.id, lastMove.posX, lastMove.posY, false);
+  /** Deshace el último cambio del plano (mover, unir, separar o añadir mesa). Solo se quita del historial si sale bien. */
+  async function undo() {
+    const step = undoStack[undoStack.length - 1]; if (!step || undoing) return;
+    setUndoing(true); setError('');
+    try {
+      let ok = true;
+      if (step.kind === 'move') ok = await move(step.id, step.posX, step.posY, false);
+      else if (step.kind === 'join') { const t = await request<DiningTable>(`/tables/${step.joinedId}/split`, { method: 'POST' }); await load(); setSelectedId(t.id); }
+      else if (step.kind === 'split') { const t = await request<DiningTable>(`/tables/${step.id}/join`, { method: 'POST', body: JSON.stringify({ withId: step.withId }) }); await load(); setSelectedId(t.id); }
+      else { await request(`/tables/${step.id}`, { method: 'DELETE' }); setSelectedId(null); await load(); }
+      if (ok) { setUndoStack(stack => stack.slice(0, -1)); setNotice(`Deshecho: ${step.label}.`); }
+    } catch (err) { setError(`No se pudo deshacer «${step.label}»: ${(err as Error).message}`); }
+    finally { setUndoing(false); }
   }
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !(target instanceof Element && target.closest('input,textarea,select'))) { e.preventDefault(); void undo(); }
+    };
+    window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
+  });
   async function createTable(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); const f = new FormData(e.currentTarget); const shape = String(f.get('shape'));
     try {
@@ -190,6 +210,7 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
         sidesUsed: shape === 'rect' ? draftSides : undefined,
         zone: String(f.get('zone') || currentZone), posX: draft?.posX ?? 0, posY: draft?.posY ?? 0 }) });
       setDraft(null); await load(); setZone(created.zone); setSelectedId(created.id); setNotice(`${created.label} añadida al plano.`);
+      pushUndo({ kind: 'create', id: created.id, label: `añadir ${created.label}` });
     } catch (err) { setError((err as Error).message); }
   }
   async function saveTable(e: FormEvent<HTMLFormElement>) {
@@ -206,12 +227,19 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
   }
   async function joinTables(target: DiningTable, other: DiningTable) {
     if (!confirm(`¿Unir ${target.label} y ${other.label}? La mesa unida ocupará el espacio de las dos y sumará sus plazas.`)) return;
-    try { const joined = await request<DiningTable>(`/tables/${target.id}/join`, { method: 'POST', body: JSON.stringify({ withId: other.id }) }); await load(); setSelectedId(joined.id); setNotice(`Mesas unidas: ${joined.label} (${joined.seats} plazas).`); }
+    try { const joined = await request<DiningTable>(`/tables/${target.id}/join`, { method: 'POST', body: JSON.stringify({ withId: other.id }) }); await load(); setSelectedId(joined.id); setNotice(`Mesas unidas: ${joined.label} (${joined.seats} plazas).`); pushUndo({ kind: 'join', joinedId: joined.id, label: `unir ${joined.label}` }); }
     catch (err) { setError((err as Error).message); }
   }
   async function splitTable() {
     if (!selected) return;
-    try { const t = await request<DiningTable>(`/tables/${selected.id}/split`, { method: 'POST' }); await load(); setSelectedId(t.id); setNotice('Mesas separadas.'); }
+    try {
+      const before = new Set(tables.map(x => x.id)), joinedLabel = selected.label;
+      const t = await request<DiningTable>(`/tables/${selected.id}/split`, { method: 'POST' });
+      const after = await request<DiningTable[]>('/tables'); setTables(after);
+      const back = after.find(x => !before.has(x.id)); // la mesa que vuelve al plano
+      setSelectedId(t.id); setNotice('Mesas separadas.');
+      if (back) pushUndo({ kind: 'split', id: t.id, withId: back.id, label: `separar ${joinedLabel}` });
+    }
     catch (err) { setError((err as Error).message); }
   }
   async function removeTable() {
@@ -242,7 +270,7 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
     <div className="section-head"><div><h3>Mapa de mesas</h3><p>Toca una mesa para abrir su comanda, añadir productos o cobrar</p></div>
       <div className="tables-head-actions">
         <span className={`mode-badge ${editMode ? 'edit' : 'service'}`}>{editMode ? '✎ Edición' : '▣ Servicio'}</span>
-        {lastMove && <button className="secondary" onClick={undoMove}>↶ Deshacer movimiento</button>}
+        {undoStack.length > 0 && <button className="secondary" disabled={undoing} onClick={() => void undo()} title="Ctrl+Z">↶ Deshacer {undoStack[undoStack.length - 1].label}</button>}
         <button className="secondary" onClick={() => void load()}>Actualizar ↻</button>
         <button className="secondary" onClick={() => setZoom(z => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))} aria-label="Reducir zoom">−</button><span className="zoom-label">{Math.round(zoom * 100)} %</span><button className="secondary" onClick={() => setZoom(z => Math.min(3, Math.round((z + 0.25) * 100) / 100))} aria-label="Aumentar zoom">＋</button><button className="secondary" onClick={() => setZoom(1)}>Ajustar</button>
         {canEdit && <button className="secondary" onClick={()=>setShowQrSettings(v=>!v)}>Ajustes QR</button>}{canEdit && <button className={editMode ? 'primary' : 'secondary'} onClick={() => { setEditMode(!editMode); setDraft(null); setRoomForm(null); }}>{editMode ? 'Terminar edición' : '✎ Editar plano'}</button>}
