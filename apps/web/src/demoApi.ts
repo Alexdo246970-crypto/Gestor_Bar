@@ -162,6 +162,13 @@ export async function demoRequest<T>(path: string, init: RequestInit = {}): Prom
 
 function handle(s: Store, method: string, parts: string[], b: any, query: URLSearchParams): unknown {
   const [root, id, action] = parts;
+  if (root === 'auth' && id === 'platform' && parts[2] === 'tenants' && method === 'GET') {
+    return [{ id: 'demo-tenant', slug: s.tenant.slug, name: s.tenant.name, timezone: s.tenant.timezone, currency: s.tenant.currency }];
+  }
+  if (root === 'auth' && id === 'platform' && parts[2] === 'tenants' && parts[3] === 'demo-tenant' && method === 'POST') {
+    return { user: { id: 'demo-user', email: 'admin-demo@barraos.local', fullName: 'Admin de demostración', tenantId: 'demo-tenant', tenantName: s.tenant.name, role: 'admin', platformAdmin: true } };
+  }
+  if (root === 'auth' && id === 'platform' && parts[2] === 'panel' && method === 'POST') return { ok: true };
   if (root === 'activity' && method === 'GET') return s.activity;
   if (root === 'tenant' && method === 'GET') return s.tenant;
   if (root === 'tenant' && method === 'PATCH') { if (b.name !== undefined) s.tenant.name = String(b.name).trim(); if (b.timezone !== undefined) s.tenant.timezone = String(b.timezone).trim(); return s.tenant; }
