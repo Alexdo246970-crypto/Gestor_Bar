@@ -6,7 +6,7 @@ type DemoProduct = Product & { description?: string | null; categoryName?: strin
 type DemoLine = { id: string; productId: string; productName: string; quantity: number; lineGross: number };
 type DemoPayment = { id: string; method: 'cash' | 'card'; amount: number; cashTendered: number | null; changeGiven: number | null; cardReference: string | null; paidAt: string };
 type DemoOrder = { id: string; orderNumber: number; status: 'open' | 'sent' | 'paid'; channel: string; tableId: string | null; tableLabel: string | null; openedAt: string; lines: DemoLine[]; payments: DemoPayment[] };
-type DemoTable = { id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar'; posX: number; posY: number };
+type DemoTable = { id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar' | 'rect'; posX: number; posY: number; widthCm?: number; heightCm?: number; sidesUsed?: string[]; seatsRecommended?: number; seatsWarning?: boolean };
 type Store = { products: DemoProduct[]; categories: { id: string; name: string; sortOrder: number }[]; tables: DemoTable[]; orders: DemoOrder[]; nextOrder: number };
 
 const STORAGE_KEY = 'barraos-demo-v2';
@@ -20,6 +20,21 @@ const round = (n: number) => Math.round(n * 100) / 100;
 const gross = (o: DemoOrder) => round(o.lines.reduce((s, l) => s + l.lineGross, 0));
 const paid = (o: DemoOrder) => round(o.payments.reduce((s, p) => s + p.amount, 0));
 const fail = (message: string): never => { throw new Error(message); };
+const SIDES = ['long1', 'long2', 'short1', 'short2'];
+const clamp = (n: number) => Math.min(20, Math.max(1, n));
+function rectRecommended(width: number, sides: string[]) {
+  const longs = sides.filter(s => s.startsWith('long')).length;
+  return sides.length ? clamp(Math.floor(width / 60) * longs + (sides.length - longs)) : 0;
+}
+const rectWarning = (t: DemoTable) => t.seatsRecommended != null && Math.abs(t.seats - t.seatsRecommended) > 2;
+function rectMeasures(b: any, current?: DemoTable) {
+  const width = Number(b.widthCm ?? current?.widthCm ?? 120), height = Number(b.heightCm ?? current?.heightCm ?? 80);
+  if (!Number.isInteger(width) || width < 80 || width > 240) fail('Ancho no válido (80-240 cm)');
+  if (!Number.isInteger(height) || height < 60 || height > 120) fail('Alto no válido (60-120 cm)');
+  const sides = (b.sidesUsed ?? current?.sidesUsed ?? ['long1', 'long2']).filter((s: string) => SIDES.includes(s));
+  if (!sides.length) fail('Marca al menos un lado de la mesa');
+  return { width, height, sides, recommended: rectRecommended(width, sides) };
+}
 
 function save() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(store)); } catch { /* almacenamiento no disponible */ } }
 
@@ -30,7 +45,7 @@ function load(): Store {
   const tables: DemoTable[] = [
     ...[1, 2, 3, 4, 5, 6].map((n, i) => ({ id: `t-salon-${n}`, label: `Mesa ${n}`, zone: 'Salón', seats: n === 5 || n === 6 ? 6 : 4, shape: (n % 3 === 0 ? 'round' : 'square') as DemoTable['shape'], posX: 1 + (i % 3) * 2, posY: 1 + Math.floor(i / 3) * 2 })),
     ...[1, 2, 3, 4].map((n, i) => ({ id: `t-terraza-${n}`, label: `Terraza ${n}`, zone: 'Terraza', seats: 2, shape: 'round' as const, posX: 1 + i * 2, posY: 1 })),
-    ...[1, 2, 3].map((n, i) => ({ id: `t-barra-${n}`, label: `Barra ${n}`, zone: 'Barra', seats: 1, shape: 'bar' as const, posX: 1 + i, posY: 1 })),
+    ...[1, 2, 3].map((n, i) => ({ id: `t-barra-${n}`, label: `Barra ${n}`, zone: 'Barra', seats: 1, shape: 'rect' as const, widthCm: 120, heightCm: 60, sidesUsed: ['long1'], seatsRecommended: 2, posX: 1 + i, posY: 1 })),
   ];
   store = { products: seedProducts.map(p => ({ ...p, categoryName: String(p.categoryId) })), categories: categoryNames.map((name, i) => ({ id: name, name, sortOrder: i })), tables, orders: [], nextOrder: 104 };
   const seeds: [string, 'open' | 'sent', number, [string, number][]][] = [
@@ -98,17 +113,29 @@ function handle(s: Store, method: string, parts: string[], b: any): unknown {
   }
   // ---- Mesas ----
   if (root === 'tables') {
-    if (!id && method === 'GET') return s.tables.map(t => { const o = activeFor(t.id); return { ...t, activeOrder: o ? orderView(o) : null }; });
+    if (!id && method === 'GET') return s.tables.map(t => { const o = activeFor(t.id); return { ...t, seatsWarning: rectWarning(t), activeOrder: o ? orderView(o) : null }; });
     const checkLabel = (label: string, self?: string) => { if (s.tables.some(t => t.id !== self && t.label.toLocaleLowerCase('es') === label.toLocaleLowerCase('es'))) fail('Ya existe una mesa con ese nombre'); };
     if (!id && method === 'POST') {
       const label = String(b.label || '').trim() || fail('El nombre de la mesa es obligatorio'); checkLabel(label);
-      const t: DemoTable = { id: uid('table'), label, zone: b.zone?.trim() || 'Salón', seats: b.seats ?? 4, shape: b.shape ?? 'square', posX: b.posX ?? 0, posY: b.posY ?? 0 };
+      const shape = b.shape ?? 'square';
+      const seats = b.seats ?? 4;
+      if (!Number.isInteger(seats) || seats < 1 || seats > 20) fail('Número de comensales no válido (1-20)');
+      const rect = shape === 'rect' ? rectMeasures(b) : { width: undefined, height: undefined, sides: undefined, recommended: undefined };
+      const t: DemoTable = { id: uid('table'), label, zone: b.zone?.trim() || 'Salón', seats, shape, widthCm: rect.width, heightCm: rect.height, sidesUsed: rect.sides, seatsRecommended: rect.recommended, seatsWarning: rectWarning({ seats, seatsRecommended: rect.recommended } as DemoTable), posX: b.posX ?? 0, posY: b.posY ?? 0 };
       s.tables.push(t); return t;
     }
     const t = s.tables.find(x => x.id === id) ?? fail('Mesa no encontrada');
     if (method === 'PATCH') {
       if (b.label !== undefined) { const label = String(b.label).trim() || fail('El nombre de la mesa no puede estar vacío'); checkLabel(label, t.id); t.label = label; const o = activeFor(t.id); if (o) o.tableLabel = label; }
       for (const k of ['zone', 'seats', 'shape', 'posX', 'posY'] as const) if (b[k] !== undefined) (t as any)[k] = b[k];
+      if (!Number.isInteger(t.seats) || t.seats < 1 || t.seats > 20) fail('Número de comensales no válido (1-20)');
+      if (t.shape === 'rect') {
+        const rect = rectMeasures(b, t);
+        t.widthCm = rect.width; t.heightCm = rect.height; t.sidesUsed = rect.sides; t.seatsRecommended = rect.recommended;
+      } else {
+        t.widthCm = undefined; t.heightCm = undefined; t.sidesUsed = undefined; t.seatsRecommended = undefined;
+      }
+      t.seatsWarning = rectWarning(t);
       return t;
     }
     if (method === 'DELETE') { if (activeFor(t.id)) fail('La mesa tiene una comanda abierta; cóbrala antes de eliminarla'); s.tables = s.tables.filter(x => x !== t); return { ok: true }; }
