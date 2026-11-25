@@ -6,7 +6,7 @@ type DemoProduct = Product & { description?: string | null; categoryName?: strin
 type DemoLine = { id: string; productId: string; productName: string; quantity: number; lineGross: number };
 type DemoPayment = { id: string; method: 'cash' | 'card'; amount: number; cashTendered: number | null; changeGiven: number | null; cardReference: string | null; paidAt: string };
 type DemoOrder = { id: string; orderNumber: number; status: 'open' | 'sent' | 'paid'; channel: string; tableId: string | null; tableLabel: string | null; openedAt: string; lines: DemoLine[]; payments: DemoPayment[] };
-type DemoTable = { id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar'; posX: number; posY: number; diameterCm?: number; widthCm?: number; heightCm?: number; seatsRecommended?: number; seatsWarning?: boolean };
+type DemoTable = { id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar' | 'rect'; posX: number; posY: number; diameterCm?: number; widthCm?: number; heightCm?: number; sidesUsed?: string[]; seatsRecommended?: number; seatsWarning?: boolean };
 type Store = { products: DemoProduct[]; categories: { id: string; name: string; sortOrder: number }[]; tables: DemoTable[]; orders: DemoOrder[]; nextOrder: number };
 
 const STORAGE_KEY = 'barraos-demo-v2';
@@ -37,6 +37,20 @@ function squareSide(value: unknown) {
   if (!Number.isInteger(side) || side < 50 || side > 150) fail('Lado no válido (50-150 cm)');
   return side;
 }
+const SIDES = ['long1', 'long2', 'short1', 'short2'];
+const rectRecommended = (width: number, sides: string[]) => {
+  if (!sides.length) return 0;
+  const longs = sides.filter(s => s.startsWith('long')).length;
+  return Math.min(20, Math.max(1, Math.floor(width / 60) * longs + (sides.length - longs)));
+};
+function rectMeasures(b: any, current?: DemoTable) {
+  const width = Number(b.widthCm ?? current?.widthCm ?? 120), height = Number(b.heightCm ?? current?.heightCm ?? 80);
+  if (!Number.isInteger(width) || width < 80 || width > 240) fail('Ancho no válido (80-240 cm)');
+  if (!Number.isInteger(height) || height < 60 || height > 120) fail('Alto no válido (60-120 cm)');
+  const sides = (b.sidesUsed ?? current?.sidesUsed ?? ['long1', 'long2']).filter((s: string) => SIDES.includes(s));
+  if (!sides.length) fail('Marca al menos un lado de la mesa');
+  return { width, height, sides, recommended: rectRecommended(width, sides) };
+}
 
 function save() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(store)); } catch { /* almacenamiento no disponible */ } }
 
@@ -47,7 +61,7 @@ function load(): Store {
   const tables: DemoTable[] = [
     ...[1, 2, 3, 4, 5, 6].map((n, i) => { const shape = (n % 3 === 0 ? 'round' : 'square') as DemoTable['shape']; const seats = n === 5 || n === 6 ? 6 : 4; const diameterCm = shape === 'round' ? (seats <= 4 ? 90 : 120) : undefined; const widthCm = shape === 'square' ? 80 : undefined; return { id: `t-salon-${n}`, label: `Mesa ${n}`, zone: 'Salón', seats, shape, diameterCm, widthCm, heightCm: widthCm, seatsRecommended: diameterCm ? roundRecommended(diameterCm) : (widthCm ? squareRecommended(widthCm) : undefined), posX: 1 + (i % 3) * 2, posY: 1 + Math.floor(i / 3) * 2 }; }),
     ...[1, 2, 3, 4].map((n, i) => ({ id: `t-terraza-${n}`, label: `Terraza ${n}`, zone: 'Terraza', seats: 2, shape: 'round' as const, diameterCm: 90, seatsRecommended: 4, posX: 1 + i * 2, posY: 1 })),
-    ...[1, 2, 3].map((n, i) => ({ id: `t-barra-${n}`, label: `Barra ${n}`, zone: 'Barra', seats: 1, shape: 'bar' as const, posX: 1 + i, posY: 1 })),
+    ...[1, 2, 3].map((n, i) => ({ id: `t-barra-${n}`, label: `Barra ${n}`, zone: 'Barra', seats: 1, shape: 'rect' as const, widthCm: 120, heightCm: 60, sidesUsed: ['long1'], seatsRecommended: 2, posX: 1 + i, posY: 1 })),
   ];
   store = { products: seedProducts.map(p => ({ ...p, categoryName: String(p.categoryId) })), categories: categoryNames.map((name, i) => ({ id: name, name, sortOrder: i })), tables, orders: [], nextOrder: 104 };
   const seeds: [string, 'open' | 'sent', number, [string, number][]][] = [
@@ -124,8 +138,9 @@ function handle(s: Store, method: string, parts: string[], b: any): unknown {
       if (!Number.isInteger(seats) || seats < 1 || seats > 20) fail('Número de comensales no válido (1-20)');
       const diameterCm = shape === 'round' ? roundDiameter(b.diameterCm ?? 90) : undefined;
       const widthCm = shape === 'square' ? squareSide(b.widthCm ?? 80) : undefined;
-      const seatsRecommended = diameterCm ? roundRecommended(diameterCm) : (widthCm ? squareRecommended(widthCm) : undefined);
-      const t: DemoTable = { id: uid('table'), label, zone: b.zone?.trim() || 'Salón', seats, shape, diameterCm, widthCm, heightCm: widthCm, seatsRecommended, seatsWarning: shapeWarning({ seats, shape, seatsRecommended } as DemoTable), posX: b.posX ?? 0, posY: b.posY ?? 0 };
+      const rect = shape === 'rect' ? rectMeasures(b) : undefined;
+      const seatsRecommended = diameterCm ? roundRecommended(diameterCm) : (widthCm ? squareRecommended(widthCm) : (rect?.recommended ?? undefined));
+      const t: DemoTable = { id: uid('table'), label, zone: b.zone?.trim() || 'Salón', seats, shape, diameterCm, widthCm, heightCm: rect ? rect.height : widthCm, sidesUsed: rect?.sides, seatsRecommended, seatsWarning: shapeWarning({ seats, shape, seatsRecommended } as DemoTable), posX: b.posX ?? 0, posY: b.posY ?? 0 };
       s.tables.push(t); return t;
     }
     const t = s.tables.find(x => x.id === id) ?? fail('Mesa no encontrada');
@@ -133,11 +148,13 @@ function handle(s: Store, method: string, parts: string[], b: any): unknown {
       if (b.label !== undefined) { const label = String(b.label).trim() || fail('El nombre de la mesa no puede estar vacío'); checkLabel(label, t.id); t.label = label; const o = activeFor(t.id); if (o) o.tableLabel = label; }
       for (const k of ['zone', 'seats', 'shape', 'posX', 'posY'] as const) if (b[k] !== undefined) (t as any)[k] = b[k];
       if (!Number.isInteger(t.seats) || t.seats < 1 || t.seats > 20) fail('Número de comensales no válido (1-20)');
-      const isRound = t.shape === 'round', isSquare = t.shape === 'square';
+      const isRound = t.shape === 'round', isSquare = t.shape === 'square', isRect = t.shape === 'rect';
+      const rect = isRect ? rectMeasures(b, t) : undefined;
       t.diameterCm = isRound ? roundDiameter(b.diameterCm ?? t.diameterCm ?? 90) : undefined;
-      t.widthCm = isSquare ? squareSide(b.widthCm ?? t.widthCm ?? 80) : undefined;
-      t.heightCm = t.widthCm;
-      t.seatsRecommended = isRound ? roundRecommended(t.diameterCm!) : (isSquare ? squareRecommended(t.widthCm!) : undefined);
+      t.widthCm = isSquare ? squareSide(b.widthCm ?? t.widthCm ?? 80) : (rect?.width ?? undefined);
+      t.heightCm = isSquare ? t.widthCm : (rect?.height ?? undefined);
+      t.sidesUsed = rect?.sides;
+      t.seatsRecommended = isRound ? roundRecommended(t.diameterCm!) : (isSquare ? squareRecommended(t.widthCm!) : (rect?.recommended ?? undefined));
       t.seatsWarning = shapeWarning(t);
       return t;
     }

@@ -65,3 +65,5 @@
 .compare-grid{display:grid;grid-template-columns:1.5fr .8fr .8fr .8fr .6fr;gap:4px 8px;font-size:10px;align-items:center}.compare-grid>span{color:#829087;font-weight:600}.compare-row{display:contents}.compare-row>*{padding:5px 0;border-top:1px solid #f0f2ef}.compare-row strong{font-size:11px}
 @media print{.sidebar,.topbar,.finance-actions,.finance-period,.toast{display:none!important}.main{padding:0}.finance-details{break-inside:avoid}}
 .measure-note,.measure-info{font-size:11px;color:#77847b}.measure-warning{font-size:11px;color:#b46b4b;background:#fff4ed;padding:6px 8px;border-left:3px solid #b46b4b}
+
+.side-picker{border:1px solid #dfe5df;border-radius:8px;display:flex;flex-wrap:wrap;gap:8px;padding:8px}.side-picker legend{font-size:11px;color:#77847b;padding:0 4px}.side-picker label{display:flex;align-items:center;gap:4px;font-size:11px}
