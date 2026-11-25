@@ -21,6 +21,8 @@ Modo demostración sin base de datos (datos en memoria del navegador): `VITE_DEM
 
 Crear el primer local y administrador mediante `POST /api/setup` (solo disponible mientras no exista ningún usuario; deshabilitar/eliminar este endpoint antes de exponer el servicio públicamente). El endpoint devuelve las credenciales iniciales una sola vez y exige una contraseña fuerte.
 
+Las cuentas opcionales de cliente usan enlaces de acceso de un solo uso. Para enviarlos, configura `RESEND_API_KEY`, `EMAIL_FROM` y `PUBLIC_APP_URL` en el entorno de la API; las preferencias del cliente se muestran en cocina para avisar sobre alergias o ingredientes que quiere evitar. El cliente puede consultar el historial de los últimos 12 meses, descargar sus datos o borrar su cuenta.
+
 ## Estructura
 
 ```text
