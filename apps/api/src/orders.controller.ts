@@ -2,6 +2,8 @@ import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get,
 import { ApiTags } from '@nestjs/swagger';
 import { DbService, AuthRequest } from './db.service';
 
+const round = (n: number) => Math.round(n * 100) / 100;
+
 @ApiTags('orders')
 @Controller('orders')
 export class OrdersController {
@@ -140,7 +142,25 @@ export class OrdersController {
       await this.finalize(c,s.tenantId,id,s.userId); return {ok:true};
     });
   }
-  private async finalize(c:any,tenant:string,id:string,user:string) {
+  /** Invitación de cortesía: se cierra la comanda sin cobro y se registra como pérdida, nunca como venta. */
+  @Post(':id/invite') async invite(@Req() req: AuthRequest, @Param('id') id: string, @Body() b: { notes?: string }) {
+    const s = this.role(req, ['admin','manager']);
+    return this.db.tenant(req, async c => {
+      const o = (await c.query(`SELECT id,order_number "orderNumber",gross_total "grossTotal",status FROM orders WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [s.tenantId,id])).rows[0];
+      if (!o || !['open','sent','pending_approval'].includes(o.status)) throw new BadRequestException('Comanda no disponible');
+      const paid = (await c.query('SELECT coalesce(sum(amount),0) amount FROM payments WHERE tenant_id=$1 AND order_id=$2', [s.tenantId,id])).rows[0];
+      if (Number(paid.amount) > 0) throw new BadRequestException('La comanda ya tiene cobros; no se puede invitar');
+      if (!(Number(o.grossTotal) > 0)) throw new BadRequestException('La comanda no tiene importe que invitar');
+      await c.query(`INSERT INTO loss_entries(tenant_id,description,amount,signed_amount,reason,source_type,source_id,occurred_at,notes,created_by)
+        VALUES($1,$2,$3,$3,'invitation','order',$4,CURRENT_DATE,$5,$6)
+        ON CONFLICT (tenant_id,source_type,source_id) DO NOTHING`,
+        [s.tenantId, `Invitación #${o.orderNumber}`, Number(o.grossTotal), id, b?.notes?.trim() || null, s.userId]);
+      await this.finalize(c, s.tenantId, id, s.userId, true);
+      return { ok: true, amount: Number(o.grossTotal) };
+    });
+  }
+
+  private async finalize(c:any,tenant:string,id:string,user:string,skipLedger=false) {
     const ord=await c.query('SELECT * FROM orders WHERE tenant_id=$1 AND id=$2 FOR UPDATE',[tenant,id]);
     if(ord.rows[0].stock_deducted_at) return;
     const consumption=await c.query(`WITH base AS (
@@ -166,12 +186,25 @@ export class OrdersController {
       await c.query(`INSERT INTO stock_movements(tenant_id,ingredient_id,movement_type,quantity_delta,unit_cost,source_type,source_id,created_by)
         VALUES($1,$2,'sale',-$3,$4,'order',$5,$6)`,[tenant,row.ingredient_id,row.quantity,row.unit_cost,id,user]);
     }
-    const pay=await c.query('SELECT method FROM payments WHERE tenant_id=$1 AND order_id=$2 ORDER BY created_at DESC LIMIT 1',[tenant,id]);
-    const account=pay.rows[0]?.method==='card'?'bank':'cash';
-    await c.query(`INSERT INTO ledger_entries(tenant_id,entry_date,entry_type,category,account,amount_net,vat,total,source_type,source_id,reference,created_by)
-      VALUES($1,CURRENT_DATE,'income','ventas',$2,$3,$4,$5,'order',$6,$7,$8)
-      ON CONFLICT (tenant_id,source_type,source_id) DO NOTHING`,
-      [tenant,account,ord.rows[0].net_total,ord.rows[0].vat_total,ord.rows[0].gross_total,id,`#${ord.rows[0].order_number}`,user]);
+    if (!skipLedger) {
+      // Cada método de pago entra en su cuenta: efectivo en caja, tarjeta en banco.
+      const pay=await c.query(`SELECT CASE WHEN method='card' THEN 'bank' ELSE 'cash' END account,
+          sum(amount) amount FROM payments WHERE tenant_id=$1 AND order_id=$2 GROUP BY 1 ORDER BY 1`,[tenant,id]);
+      const parts=pay.rows.length?pay.rows:[{account:'cash',amount:ord.rows[0].gross_total}];
+      const collected=parts.reduce((sum:number,p:any)=>sum+Number(p.amount),0);
+      const businessDate=(await c.query('SELECT (now() AT TIME ZONE (SELECT timezone FROM tenants WHERE id=$1))::date "date"',[tenant])).rows[0].date;
+      let netSoFar=0,vatSoFar=0;
+      for(let i=0;i<parts.length;i++){
+        const p=parts[i],last=i===parts.length-1;
+        const net=last?Math.max(0,Number(ord.rows[0].net_total)-netSoFar):round(Number(ord.rows[0].net_total)*Number(p.amount)/(collected||1));
+        const vat=last?Math.max(0,Number(ord.rows[0].vat_total)-vatSoFar):round(Number(ord.rows[0].vat_total)*Number(p.amount)/(collected||1));
+        netSoFar+=net;vatSoFar+=vat;
+        await c.query(`INSERT INTO ledger_entries(tenant_id,entry_date,entry_type,category,account,amount_net,vat,total,source_type,source_id,reference,notes,created_by)
+          VALUES($1,$2,'income','ventas',$3,$4,$5,$6,'order',$7,$8,$9,$10)
+          ON CONFLICT (tenant_id,source_type,source_id,account) DO NOTHING`,
+          [tenant,businessDate,p.account,net,vat,Number(p.amount),id,`#${ord.rows[0].order_number}`,p.account==='bank'?'Tarjeta':'Efectivo',user]);
+      }
+    }
     await c.query("UPDATE orders SET status='paid',closed_at=now(),stock_deducted_at=now() WHERE tenant_id=$1 AND id=$2",[tenant,id]);
   }
 }

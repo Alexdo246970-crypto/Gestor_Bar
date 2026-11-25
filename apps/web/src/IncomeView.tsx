@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { DEMO, euro, request } from './lib';
 
+type Amortization = { id: string; name: string; monthlyAmount: number; startMonth: string; endMonth: string | null; active: boolean };
 type Line = { key: string; label: string; amount: number; formula: string; sources: string[]; weight: number | null; highlight?: boolean };
 type Result = {
   from: string; to: string; lines: Line[];
@@ -10,21 +11,51 @@ type Result = {
   ledger: any[]; expenseBreakdown: any[];
 };
 
-export function IncomeView() {
+export function IncomeView({ canEdit }: { canEdit: boolean }) {
   const [from, setFrom] = useState(`${new Date().getFullYear()}-01-01`), [to, setTo] = useState(new Date().toLocaleDateString('en-CA'));
   const [data, setData] = useState<Result | null>(null), [error, setError] = useState(''), [selected, setSelected] = useState<Line | null>(null);
+  const [amortizations, setAmortizations] = useState<Amortization[]>([]), [showAmortization, setShowAmortization] = useState(false), [notice, setNotice] = useState('');
+
+  async function loadAmortizations() {
+    if (DEMO) return;
+    try { setAmortizations(await request<Amortization[]>('/reports/amortizations')); }
+    catch (e) { setError((e as Error).message); }
+  }
+  async function saveAmortization(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); const f = new FormData(e.currentTarget);
+    try {
+      await request('/reports/amortizations', { method: 'POST', body: JSON.stringify({
+        name: String(f.get('name')), monthlyAmount: Number(f.get('monthlyAmount')),
+        startMonth: String(f.get('startMonth')), endMonth: String(f.get('endMonth') || '') || undefined
+      }) });
+      setShowAmortization(false); setNotice('Amortización registrada.'); await loadAmortizations(); await load();
+    } catch (err) { setError((err as Error).message); }
+  }
+  async function removeAmortization(id: string) {
+    try { await request(`/reports/amortizations/${id}`, { method: 'DELETE' }); setNotice('Amortización dada de baja.'); await loadAmortizations(); await load(); }
+    catch (err) { setError((err as Error).message); }
+  }
 
   async function load() {
     if (DEMO) { setData(null); return; }
     try { setData(await request<Result>(`/reports/income-statement?from=${from}&to=${to}`)); }
     catch (e) { setError((e as Error).message); }
   }
+  useEffect(() => { void loadAmortizations(); }, []);
   useEffect(() => { void load(); }, [from, to]);
 
   return <section className="finance-page">
     <div className="section-head"><div><h3>Estado de resultados</h3><p>Beneficio reproducible, con fórmula y detalle por línea</p></div>
-      <a className="secondary button-link" href={`${DEMO ? '#' : `/api/reports/income-statement.csv?from=${from}&to=${to}`}`} download>↓ Exportar CSV</a></div>
+      <div className="tables-head-actions">{canEdit && !DEMO && <button className="secondary" onClick={() => setShowAmortization(true)}>＋ Amortización</button>}
+        <a className="secondary button-link" href={`${DEMO ? '#' : `/api/reports/income-statement.csv?from=${from}&to=${to}`}`} download>↓ Exportar CSV</a></div></div>
     {error && <div className="toast" onClick={() => setError('')}>{error} ×</div>}
+    {notice && <div className="order-notice" onClick={() => setNotice('')}>✓ {notice}</div>}
+    <section className="amortization-panel"><div className="section-head"><div><h3>Amortizaciones</h3><p>Importe mensual manual, vigente en los meses del rango</p></div></div>
+      <div className="ledger-lines">{amortizations.map(a => <div key={a.id} className="ledger-line"><span>{a.name}</span>
+        <small>{euro(a.monthlyAmount)}/mes · {a.startMonth} – {a.endMonth || 'sin fin'}{!a.active ? ' · inactiva' : ''}</small>
+        {canEdit && !DEMO && a.active && <button className="remove-button" onClick={() => void removeAmortization(a.id)}>Dar de baja</button>}
+      </div>)}{!amortizations.length && <p className="finance-note">Sin amortizaciones registradas.</p>}</div>
+    </section>
     <div className="finance-period"><label>Desde<input type="date" value={from} onChange={e => setFrom(e.target.value)} /></label>
       <label>Hasta<input type="date" value={to} onChange={e => setTo(e.target.value)} /></label>
       <span>Máximo 2 años · las comparativas usan la misma duración</span></div>
@@ -48,5 +79,13 @@ export function IncomeView() {
       </section></div>
     </>}
     {selected && <div className="order-notice" onClick={() => setSelected(null)}>{selected.label}: {selected.formula} → {euro(selected.amount)}</div>}
+    {showAmortization && <div className="modal-backdrop"><form className="modal-card" onSubmit={saveAmortization}>
+      <div className="section-head"><div><h3>Nueva amortización</h3><p>Se aplica a cada mes activo del periodo consultado</p></div></div>
+      <label>Concepto<input name="name" required placeholder="Equipo de cocina, reforma…" /></label>
+      <div className="form-pair"><label>Importe mensual<input name="monthlyAmount" type="number" min="0.01" step="0.01" required /></label>
+        <label>Mes de inicio<input name="startMonth" type="month" required defaultValue={from.slice(0, 7)} /></label></div>
+      <label>Mes final (opcional)<input name="endMonth" type="month" /></label>
+      <div className="modal-actions"><button type="button" className="secondary" onClick={() => setShowAmortization(false)}>Cancelar</button><button className="primary">Guardar</button></div>
+    </form></div>}
   </section>;
 }

@@ -36,7 +36,7 @@ export class FinanceController {
   private allowed(req: AuthRequest) {
     const s = req.session?.app;
     if (!s) throw new UnauthorizedException();
-    if (!['admin', 'manager', 'cashier'].includes(s.role)) throw new ForbiddenException('Permiso insuficiente');
+    if (!['admin', 'owner', 'manager', 'cashier'].includes(s.role)) throw new ForbiddenException('Permiso insuficiente');
     return s;
   }
 
@@ -186,7 +186,7 @@ export class FinanceController {
     const base = [esc(data.startDate), esc(meta)];
     for (const [key, label] of Object.entries(KPI_LABELS)) {
       const v = data.comparison.kpis[key];
-      if (!v) continue;
+      if (!v || typeof v !== 'object') continue;
       rows.push([...base, esc(label), 'KPI', v.current, v.previous, v.absolute, v.percent ?? ''].join(','));
     }
     for (const s of data.supplierBreakdown) rows.push([...base, esc('Coste por proveedor'), esc(s.supplier), s.gross, '', '', ''].join(','));
@@ -204,8 +204,14 @@ export class FinanceController {
     if (!b?.date || !b.category || !b.description || !Number.isFinite(b.netAmount) || b.netAmount < 0 || !Number.isFinite(b.vatRate) || b.vatRate < 0) throw new BadRequestException('Datos de gasto inválidos');
     return this.db.tenant(req, async c => {
       const vat = Number((b.netAmount * b.vatRate / 100).toFixed(2)), gross = Number((b.netAmount + vat).toFixed(2));
-      return (await c.query('INSERT INTO expenses(tenant_id,expense_date,category,description,net_amount,vat_rate,vat_amount,vat_deductible,gross_amount,payment_method,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id,expense_date "date",category,description,net_amount "netAmount",vat_amount "vatAmount",gross_amount "grossAmount"',
+      const expense = (await c.query('INSERT INTO expenses(tenant_id,expense_date,category,description,net_amount,vat_rate,vat_amount,vat_deductible,gross_amount,payment_method,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id,expense_date "date",category,description,net_amount "netAmount",vat_amount "vatAmount",gross_amount "grossAmount"',
         [s.tenantId, b.date, b.category, b.description, b.netAmount, b.vatRate, vat, b.vatDeductible !== false, gross, b.paymentMethod || null, s.userId])).rows[0];
+      const account = b.paymentMethod === 'card' ? 'bank' : 'cash';
+      await c.query(`INSERT INTO ledger_entries(tenant_id,entry_date,entry_type,category,account,amount_net,vat,total,source_type,source_id,reference,notes,created_by)
+        VALUES($1,$2,'expense',$3,$4,$5,$6,$7,'expense',$8,$9,$10,$11)
+        ON CONFLICT (tenant_id,source_type,source_id,account) DO NOTHING`,
+        [s.tenantId, b.date, b.category, account, b.netAmount, vat, gross, expense.id, b.description, b.description, s.userId]);
+      return expense;
     });
   }
 

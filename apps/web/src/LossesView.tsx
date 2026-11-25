@@ -33,7 +33,7 @@ export function LossesView({ canManage }: { canManage: boolean }) {
   const max = Math.max(1, ...(data?.byReason.map(r => r.amount) ?? []));
   return <section className="finance-page">
     <div className="section-head"><div><h3>Pérdidas del negocio</h3><p>Mermas, roturas, invitaciones y descuadres valorados</p></div>
-      {canManage && !DEMO && <><button className="secondary" onClick={() => void act('/losses/sync-cash')}>Importar descuadres</button> <button className="primary" onClick={() => setShowInvitation(true)}>＋ Invitación</button></>}</div>
+      {canManage && !DEMO && <button className="primary" onClick={() => setShowInvitation(true)}>＋ Invitación</button>}</div>
     {error && <div className="toast" onClick={() => setError('')}>{error} ×</div>}
     {notice && <div className="order-notice" onClick={() => setNotice('')}>✓ {notice}</div>}
     {data?.alert && <div className="loss-alert">⚠ Las pérdidas son el {data.percentOfSales} % de las ventas y superan el umbral del {data.thresholdPct} %.</div>}

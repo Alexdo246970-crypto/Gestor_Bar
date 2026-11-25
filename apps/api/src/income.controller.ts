@@ -1,4 +1,4 @@
-import { BadRequestException, Controller, ForbiddenException, Get, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Param, Post, Query, Req, Res, UnauthorizedException } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { DbService, AuthRequest } from './db.service';
@@ -11,6 +11,14 @@ const shift = (value: string, days: number) => {
 const shiftYear = (value: string) => {
   const d = new Date(`${value}T00:00:00Z`); d.setUTCFullYear(d.getUTCFullYear() - 1); return day(d);
 };
+const monthKey = (value: unknown) => {
+  const m = String(value || '');
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(m)) throw new BadRequestException('Mes no válido (AAAA-MM)');
+  return m;
+};
+const monthIndex = (m: string) => Number(m.slice(0, 4)) * 12 + Number(m.slice(5, 7)) - 1;
+
+type AmortizationBody = { name?: string; monthlyAmount?: number; startMonth?: string; endMonth?: string };
 
 type Figures = {
   salesNet: number; salesGross: number; orders: number; cogs: number; grossMargin: number;
@@ -62,8 +70,17 @@ export class IncomeController {
       taxes += Number((await c.query(`SELECT coalesce(sum(amount),0) total FROM other_taxes WHERE tenant_id=$1 AND paid
         AND (due_date IS NULL OR (due_date >= $2::date AND due_date < $3::date))`, [tenant, from, next])).rows[0].total);
     }
-    const amortization = Number((await c.query(`SELECT coalesce(sum(monthly_amount),0) total FROM amortizations
-      WHERE tenant_id=$1 AND active AND start_month <= $3::date AND (end_month IS NULL OR end_month >= $2::date)`, [tenant, from, next])).rows[0].total);
+    // La amortización es mensual: se cuenta una vez por mes activo dentro del rango.
+    const amortRows = (await c.query(`SELECT monthly_amount "monthlyAmount",start_month "startMonth",end_month "endMonth"
+      FROM amortizations WHERE tenant_id=$1 AND active AND start_month <= $3::date
+        AND (end_month IS NULL OR end_month >= $2::date)`, [tenant, from, next])).rows;
+    const firstMonth = from.slice(0, 7), lastMonth = to.slice(0, 7);
+    const amortization = amortRows.reduce((sum: number, a: any) => {
+      const start = String(a.startMonth).slice(0, 7);
+      const end = a.endMonth ? String(a.endMonth).slice(0, 7) : lastMonth;
+      const months = Math.max(0, Math.min(monthIndex(end), monthIndex(lastMonth)) - Math.max(monthIndex(start), monthIndex(firstMonth)) + 1);
+      return sum + Number(a.monthlyAmount) * months;
+    }, 0);
 
     const salesNet = round(Number(sales.net)), cogs = round(Number(cogsRow.cost));
     const grossMargin = round(salesNet - cogs), personalCost = round(personal);
@@ -120,6 +137,35 @@ export class IncomeController {
         },
         ledger: current.ledger, expenseBreakdown: current.expenseBreakdown
       };
+    });
+  }
+
+  @Get('amortizations') async amortizations(@Req() req: AuthRequest) {
+    const s = this.session(req);
+    return this.db.tenant(req, async c => (await c.query(`SELECT id,name,monthly_amount "monthlyAmount",start_month "startMonth",end_month "endMonth",active
+      FROM amortizations WHERE tenant_id=$1 ORDER BY start_month DESC,name`, [s.tenantId])).rows);
+  }
+
+  @Post('amortizations') async addAmortization(@Req() req: AuthRequest, @Body() b: AmortizationBody) {
+    const s = this.session(req);
+    if (s.role !== 'admin') throw new ForbiddenException('Solo el administrador puede registrar amortizaciones');
+    const start = monthKey(b.startMonth), end = b.endMonth ? monthKey(b.endMonth) : null;
+    if (!b?.name?.trim()) throw new BadRequestException('El concepto es obligatorio');
+    if (!(Number(b.monthlyAmount) > 0) || !Number.isFinite(Number(b.monthlyAmount))) throw new BadRequestException('El importe mensual debe ser positivo');
+    if (end && end < start) throw new BadRequestException('El mes final no puede ser anterior al inicial');
+    return this.db.tenant(req, async c => (await c.query(`INSERT INTO amortizations
+      (tenant_id,name,monthly_amount,start_month,end_month,created_by) VALUES($1,$2,$3,$4::date,$5::date,$6)
+      RETURNING id,name,monthly_amount "monthlyAmount",start_month "startMonth",end_month "endMonth",active`,
+      [s.tenantId, b.name!.trim(), round(Number(b.monthlyAmount)), `${start}-01`, end ? `${end}-01` : null, s.userId])).rows[0]);
+  }
+
+  @Delete('amortizations/:id') async deactivateAmortization(@Req() req: AuthRequest, @Param('id') id: string) {
+    const s = this.session(req);
+    if (s.role !== 'admin') throw new ForbiddenException('Solo el administrador puede dar de baja amortizaciones');
+    return this.db.tenant(req, async c => {
+      const r = await c.query('UPDATE amortizations SET active=false WHERE tenant_id=$1 AND id=$2 AND active RETURNING id', [s.tenantId, id]);
+      if (!r.rowCount) throw new BadRequestException('Amortización no encontrada o ya inactiva');
+      return { ok: true };
     });
   }
 

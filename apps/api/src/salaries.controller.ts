@@ -28,7 +28,7 @@ export class SalariesController {
   }
 
   @Get('employees') async employees(@Req() req: AuthRequest) {
-    this.session(req);
+    this.session(req, true); // El cajero solo consulta totales, nunca la plantilla nominativa.
     return this.db.tenant(req, async c => (await c.query(`SELECT id,name,tax_id "taxId",position,hired_at "hiredAt",left_at "leftAt",
         user_id "userId",payment_account "paymentAccount",active FROM employees WHERE tenant_id=$1 ORDER BY active DESC,name`, [req.session!.app!.tenantId])).rows);
   }
@@ -67,7 +67,8 @@ export class SalariesController {
   }
 
   @Get('salaries') async salaries(@Req() req: AuthRequest, @Query('month') month?: string, @Query('employeeId') employeeId?: string) {
-    this.session(req);
+    const s = this.session(req);
+    const totalsOnly = s.role === 'cashier';
     return this.db.tenant(req, async c => {
       const period = month ? this.month(month) : null;
       const rows = (await c.query(`SELECT s.id,s.month,s.status,s.net,s.gross,s.social_security_company "socialSecurityCompany",
@@ -75,11 +76,13 @@ export class SalariesController {
           s.payment_date "paymentDate",s.paid_at "paidAt",s.notes,e.id "employeeId",e.name "employeeName",e.position
         FROM salary_entries s JOIN employees e ON e.tenant_id=s.tenant_id AND e.id=s.employee_id
         WHERE s.tenant_id=$1 AND ($2::date IS NULL OR s.month=$2::date) AND ($3::uuid IS NULL OR s.employee_id=$3::uuid)
-        ORDER BY s.month DESC,e.name`, [req.session!.app!.tenantId, period, employeeId || null])).rows;
+        ORDER BY s.month DESC,e.name`, [s.tenantId, period, employeeId || null])).rows;
       const totals = rows.filter(r => r.status !== 'void').reduce((a: any, r: any) => {
         a.gross += Number(r.gross); a.net += Number(r.net); a.company += Number(r.socialSecurityCompany); return a;
       }, { gross: 0, net: 0, company: 0 });
-      return { lines: rows, totals: { gross: round(totals.gross), net: round(totals.net), socialSecurityCompany: round(totals.company), cost: round(totals.gross + totals.company) } };
+      const result: any = { totals: { gross: round(totals.gross), net: round(totals.net), socialSecurityCompany: round(totals.company), cost: round(totals.gross + totals.company) } };
+      if (!totalsOnly) result.lines = rows;
+      return result;
     });
   }
 
@@ -117,7 +120,7 @@ export class SalariesController {
         if (amount <= 0) continue;
         await c.query(`INSERT INTO ledger_entries(tenant_id,entry_date,entry_type,category,account,amount_net,vat,total,source_type,source_id,reference,notes,created_by)
           VALUES($1,$2,'expense',$3,'bank',$4,0,$4,$5,$6,$7,$8,$9)
-          ON CONFLICT (tenant_id,source_type,source_id) DO NOTHING`,
+          ON CONFLICT (tenant_id,source_type,source_id,account) DO NOTHING`,
           [s.tenantId, p.month, category, amount, source, id, String(p.month).slice(0, 7), notes, s.userId]);
       }
       await c.query("UPDATE salary_entries SET status='confirmed',confirmed_at=now() WHERE tenant_id=$1 AND id=$2", [s.tenantId, id]);
@@ -130,6 +133,7 @@ export class SalariesController {
     return this.db.tenant(req, async c => {
       const r = await c.query("UPDATE salary_entries SET paid_at=coalesce($3::date,paid_at),payment_date=coalesce($3::date,payment_date),status='paid' WHERE tenant_id=$1 AND id=$2 AND status='confirmed' RETURNING id,paid_at \"paidAt\"", [s.tenantId, id, b.paidAt || null]);
       if (!r.rowCount) throw new BadRequestException('Nómina no encontrada o no confirmada');
+      await c.query("UPDATE treasury_commitments SET paid=true,paid_at=now() WHERE tenant_id=$1 AND source_type='salary' AND source_id=$2 AND NOT paid", [s.tenantId, id]);
       return r.rows[0];
     });
   }
@@ -147,7 +151,7 @@ export class SalariesController {
         if (amount <= 0) continue;
         await c.query(`INSERT INTO ledger_entries(tenant_id,entry_date,entry_type,category,account,amount_net,vat,total,source_type,source_id,notes,created_by)
           VALUES($1,$2,'income','Regularización personal','bank',$3,0,$3,$4,$5,$6,$7)
-          ON CONFLICT (tenant_id,source_type,source_id) DO NOTHING`,
+          ON CONFLICT (tenant_id,source_type,source_id,account) DO NOTHING`,
           [s.tenantId, p.month, amount, source, id, `${notes}${b.reason ? ` · ${b.reason}` : ''}`, s.userId]);
       }
       await c.query("UPDATE salary_entries SET status='void',notes=coalesce(notes,'') || $3 WHERE tenant_id=$1 AND id=$2", [s.tenantId, id, ` · Anulada: ${b.reason || 'sin motivo'}`]);

@@ -1,16 +1,18 @@
 // Backend simulado en memoria para VITE_DEMO_MODE=true. Replica las reglas principales de la API real
 // (una comanda activa por mesa, pagos por tarjeta TPV o efectivo, cierre al completar el total).
 import type { Product } from '@bar/contracts';
+import { DEFAULT_COLS, DEFAULT_ROWS, Rect, freeSpot, joinedRect } from './floorLayout';
 
 type DemoProduct = Product & { description?: string | null; categoryName?: string | null; [extra: string]: unknown };
 type DemoLine = { id: string; productId: string; productName: string; quantity: number; lineGross: number; cancelledAt?: string; cancellationReason?: string; addedBy?: string };
 type DemoPayment = { id: string; method: 'cash' | 'card'; amount: number; cashTendered: number | null; changeGiven: number | null; cardReference: string | null; paidAt: string };
 type DemoOrder = { id: string; orderNumber: number; status: 'open' | 'sent' | 'paid'; channel: string; tableId: string | null; tableLabel: string | null; openedAt: string; lines: DemoLine[]; payments: DemoPayment[] };
-type JoinSnapshot = { joinedId: string; label: string; seats: number; shape: DemoTable['shape']; spanX: number; spanY: number; offX: number; offY: number; joinedOffX: number; joinedOffY: number };
+type JoinSnapshot = { joinedId: string; joinedZone?: string; widthCm?: number; heightCm?: number; diameterCm?: number; label: string; seats: number; shape: DemoTable['shape']; spanX: number; spanY: number; offX: number; offY: number; joinedOffX: number; joinedOffY: number };
 type DemoTable = { id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar' | 'rect'; posX: number; posY: number; diameterCm?: number; widthCm?: number; heightCm?: number; sidesUsed?: string[]; seatsRecommended?: number; seatsWarning?: boolean; spanX?: number; spanY?: number; mergedFrom?: JoinSnapshot[]; active?: boolean };
 type DemoDailyMenu = { id: string; date: string; name: string; priceNet: number; vatRate: number; products: { id: string; name: string }[] };
 type DemoIngredient = { id: string; name: string; unit: string; quantityPerUnit?: number };
-type Store = { products: DemoProduct[]; categories: { id: string; name: string; sortOrder: number }[]; tables: DemoTable[]; orders: DemoOrder[]; dailyMenus: DemoDailyMenu[]; staff: { id: string; email: string; fullName: string; role: string; active: boolean }[]; activity: { id: string; eventType: string; targetId: string | null; details: Record<string, unknown>; createdAt: string; actorName: string | null }[]; tenant: { name: string; slug: string; timezone: string; currency: string }; nextOrder: number };
+type DemoRoom = { id: string; name: string; widthCm: number; heightCm: number; sortOrder: number; active: boolean };
+type Store = { rooms?: DemoRoom[]; products: DemoProduct[]; categories: { id: string; name: string; sortOrder: number }[]; tables: DemoTable[]; orders: DemoOrder[]; dailyMenus: DemoDailyMenu[]; staff: { id: string; email: string; fullName: string; role: string; active: boolean }[]; activity: { id: string; eventType: string; targetId: string | null; details: Record<string, unknown>; createdAt: string; actorName: string | null }[]; tenant: { name: string; slug: string; timezone: string; currency: string }; nextOrder: number };
 
 const STORAGE_KEY = 'barraos-demo-v2';
 let seedProducts: DemoProduct[] = [];
@@ -110,10 +112,33 @@ function addLine(order: DemoOrder, productId: string, quantity: number, extrasNe
 function orderView(o: DemoOrder) { return { ...o, grossTotal: gross(o), paidTotal: paid(o), lineCount: o.lines.filter(l => !l.cancelledAt).length }; }
 function tableView(t: DemoTable) { const { mergedFrom, active, ...rest } = t; return { ...rest, spanX: t.spanX ?? 1, spanY: t.spanY ?? 1, joinedCount: mergedFrom?.length ?? 0 }; }
 /** "Mesa 1" + "Mesa 2" → "Mesa 1+2" (misma regla que la API). */
+/** Casillas de 40 cm que ocupa una mesa (misma regla que la API y el plano). */
+function footprint(t: { posX: number; posY: number; shape: string; spanX?: number; spanY?: number; diameterCm?: number; widthCm?: number; heightCm?: number; mergedFrom?: unknown[] }): Rect {
+  const sx = t.spanX ?? 1, sy = t.spanY ?? 1, joined = (t.mergedFrom?.length ?? 0) > 0 || sx > 1 || sy > 1;
+  const wCm = joined ? sx * 40 : t.shape === 'round' ? t.diameterCm || 90 : t.widthCm || (t.shape === 'bar' ? 120 : 80);
+  const hCm = joined ? sy * 40 : t.shape === 'round' ? t.diameterCm || 90 : t.heightCm || (t.shape === 'bar' ? 60 : 80);
+  return { x: t.posX, y: t.posY, w: Math.max(1, Math.round(wCm / 40), sx), h: Math.max(1, Math.round(hCm / 40), sy) };
+}
 function joinedLabel(first: string, second: string) {
   const re = /^(.*?)\s*(\d+(?:\+\d+)*)$/, a = first.match(re), b = second.match(re);
   if (a && b && a[1].toLocaleLowerCase('es') === b[1].toLocaleLowerCase('es')) return `${a[1]}${a[1] ? ' ' : ''}${a[2]}+${b[2]}`;
   return `${first} + ${second}`;
+}
+/** Salas del modo demo: se crean a partir de las zonas de las mesas la primera vez (8 × 5 m). */
+function demoRooms(s: Store) {
+  if (!s.rooms) s.rooms = [...new Set(s.tables.filter(t => t.active !== false).map(t => t.zone))].map((name, i) => ({ id: `room-${i + 1}`, name, widthCm: 800, heightCm: 500, sortOrder: i, active: true }));
+  return s.rooms;
+}
+/** Tamaño de la sala en casillas de 40 cm (8 × 5 si la zona no tiene sala). */
+function roomGrid(s: Store, zone: string) {
+  const r = demoRooms(s).find(x => x.active && x.name.toLocaleLowerCase('es') === zone.toLocaleLowerCase('es'));
+  return r ? { room: r, cols: Math.ceil(r.widthCm / 40), rows: Math.ceil(r.heightCm / 40) } : { room: undefined, cols: DEFAULT_COLS, rows: DEFAULT_ROWS };
+}
+/** Si una mesa no cabe, la sala crece hasta que quepa (máximo 100 m). */
+function growRoom(s: Store, zone: string, r: Rect) {
+  const g = roomGrid(s, zone); if (!g.room) return;
+  g.room.widthCm = Math.min(10000, Math.max(g.room.widthCm, (r.x + r.w) * 40));
+  g.room.heightCm = Math.min(10000, Math.max(g.room.heightCm, (r.y + r.h) * 40));
 }
 function activeFor(tableId: string) { return load().orders.find(o => o.tableId === tableId && (o.status === 'open' || o.status === 'sent')); }
 
@@ -202,6 +227,35 @@ function handle(s: Store, method: string, parts: string[], b: any, query: URLSea
     }
     if (method === 'DELETE') { p.active = false; return { ok: true }; }
   }
+  // ---- Salas ----
+  if (root === 'rooms') {
+    const rooms = demoRooms(s);
+    const checkSize = (v: unknown) => v === undefined || (Number.isInteger(v) && Number(v) >= 100 && Number(v) <= 10000) || fail('Medidas de sala no válidas (100-10000 cm)');
+    const checkName = (name: string, self?: string) => { if (rooms.some(r => r.active && r.id !== self && r.name.toLocaleLowerCase('es') === name.toLocaleLowerCase('es'))) fail('Ya existe una sala con ese nombre'); };
+    if (!id && method === 'GET') return rooms.filter(r => r.active).sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'es')).map(r => {
+      const ts = s.tables.filter(t => t.active !== false && t.zone === r.name);
+      return { ...r, tableCount: ts.length, busyCount: ts.filter(t => activeFor(t.id)).length };
+    });
+    if (!id && method === 'POST') {
+      const name = String(b.name || '').trim() || fail('El nombre de la sala es obligatorio'); checkName(name); checkSize(b.widthCm); checkSize(b.heightCm);
+      const r: DemoRoom = { id: uid('room'), name, widthCm: b.widthCm ?? 800, heightCm: b.heightCm ?? 500, sortOrder: b.sortOrder ?? rooms.length, active: true };
+      rooms.push(r); return r;
+    }
+    const r = rooms.find(x => x.id === id && x.active) ?? fail('Sala no encontrada');
+    if (method === 'PATCH') {
+      checkSize(b.widthCm); checkSize(b.heightCm);
+      if (b.name !== undefined) { const name = String(b.name).trim() || fail('El nombre de la sala no puede estar vacío'); checkName(name, r.id); s.tables.filter(t => t.zone === r.name).forEach(t => { t.zone = name; }); r.name = name; }
+      if (b.widthCm !== undefined) r.widthCm = b.widthCm;
+      if (b.heightCm !== undefined) r.heightCm = b.heightCm;
+      if (b.sortOrder !== undefined) r.sortOrder = b.sortOrder;
+      return r;
+    }
+    if (method === 'DELETE') {
+      const busy = s.tables.some(t => t.active !== false && t.zone === r.name && activeFor(t.id));
+      if (busy && query.get('force') !== 'true') fail('La sala tiene comandas abiertas; confirma para archivarla');
+      r.active = false; return { ok: true, archivedWithOpenOrders: busy };
+    }
+  }
   // ---- Mesas ----
   if (root === 'tables') {
     if (!id && method === 'GET') return s.tables.filter(t => t.active !== false).map(t => { const o = activeFor(t.id); return { ...tableView(t), seatsWarning: shapeWarning(t), activeOrder: o ? orderView(o) : null }; });
@@ -223,20 +277,19 @@ function handle(s: Store, method: string, parts: string[], b: any, query: URLSea
     const t = s.tables.find(x => x.id === id && x.active !== false) ?? fail('Mesa no encontrada');
     if (action === 'join' && method === 'POST') {
       const o = s.tables.find(x => x.id === b.withId && x.id !== t.id && x.active !== false) ?? fail('Elige otra mesa para unir');
-      if (o.zone !== t.zone) fail('Solo se pueden unir mesas de la misma zona');
-      const [aw, ah, ow, oh] = [t.spanX ?? 1, t.spanY ?? 1, o.spanX ?? 1, o.spanY ?? 1];
-      const horizontal = t.posY === o.posY && ah === oh && (t.posX + aw === o.posX || o.posX + ow === t.posX);
-      const vertical = t.posX === o.posX && aw === ow && (t.posY + ah === o.posY || o.posY + oh === t.posY);
-      if (!horizontal && !vertical) fail('Las mesas deben estar juntas y alineadas para formar una mesa rectangular');
       const ot = activeFor(t.id), oo = activeFor(o.id);
       if (ot && oo) fail('Las dos mesas tienen comanda abierta; cobra una antes de unirlas');
-      const ux = Math.min(t.posX, o.posX), uy = Math.min(t.posY, o.posY);
+      const [aw, ah] = [t.spanX ?? 1, t.spanY ?? 1];
+      const others = s.tables.filter(x => x.active !== false && x.zone === t.zone && x.id !== t.id && x.id !== o.id).map(footprint);
+      const grid = roomGrid(s, t.zone), fo = footprint(o);
+      const u = joinedRect(footprint(t), o.zone === t.zone ? fo : { ...fo, x: -1000, y: -1000 }, others, grid.cols, grid.rows), ux = u.x, uy = u.y;
+      growRoom(s, t.zone, u);
       const [first, second] = t.posX + t.posY <= o.posX + o.posY ? [t, o] : [o, t];
       const label = joinedLabel(first.label, second.label);
       checkLabel(label, t.id);
-      t.mergedFrom = [...(t.mergedFrom ?? []), { joinedId: o.id, label: t.label, seats: t.seats, shape: t.shape, spanX: aw, spanY: ah, offX: t.posX - ux, offY: t.posY - uy, joinedOffX: o.posX - ux, joinedOffY: o.posY - uy }];
+      t.mergedFrom = [...(t.mergedFrom ?? []), { joinedId: o.id, joinedZone: o.zone, widthCm: t.widthCm, heightCm: t.heightCm, diameterCm: t.diameterCm, label: t.label, seats: t.seats, shape: t.shape, spanX: aw, spanY: ah, offX: t.posX - ux, offY: t.posY - uy, joinedOffX: o.posX - ux, joinedOffY: o.posY - uy }];
       o.active = false;
-      Object.assign(t, { label, seats: t.seats + o.seats, shape: 'rect', posX: ux, posY: uy, spanX: horizontal ? aw + ow : aw, spanY: vertical ? ah + oh : ah });
+      Object.assign(t, { label, seats: t.seats + o.seats, shape: 'rect', posX: ux, posY: uy, spanX: u.w, spanY: u.h, widthCm: u.w * 40, heightCm: u.h * 40, diameterCm: undefined, seatsRecommended: t.seats + o.seats });
       const order = ot ?? oo;
       if (order) { order.tableId = t.id; order.tableLabel = label; }
       return tableView(t);
@@ -246,8 +299,19 @@ function handle(s: Store, method: string, parts: string[], b: any, query: URLSea
       const o = s.tables.find(x => x.id === last.joinedId);
       if (o) checkLabel(o.label, o.id);
       const [px, py] = [t.posX, t.posY];
-      Object.assign(t, { label: last.label, seats: last.seats, shape: last.shape, spanX: last.spanX, spanY: last.spanY, posX: px + last.offX, posY: py + last.offY, mergedFrom: t.mergedFrom!.slice(0, -1) });
-      if (o) Object.assign(o, { active: true, zone: t.zone, posX: px + last.joinedOffX, posY: py + last.joinedOffY });
+      const free = (zone: string, self: string) => s.tables.filter(x => x.active !== false && x.zone === zone && x.id !== self).map(footprint);
+      const ft = footprint({ ...last, posX: 0, posY: 0, mergedFrom: t.mergedFrom!.slice(0, -1) });
+      const tg = roomGrid(s, t.zone);
+      const tp = freeSpot(free(t.zone, t.id), ft.w, ft.h, tg.cols, tg.rows, [{ x: px + last.offX, y: py + last.offY }, { x: px, y: py }]);
+      growRoom(s, t.zone, { ...tp, w: ft.w, h: ft.h });
+      Object.assign(t, { label: last.label, seats: last.seats, shape: last.shape, spanX: last.spanX, spanY: last.spanY, widthCm: last.widthCm, heightCm: last.heightCm, diameterCm: last.diameterCm, posX: tp.x, posY: tp.y, mergedFrom: t.mergedFrom!.slice(0, -1) });
+      if (o) {
+        const zone = last.joinedZone ?? t.zone, fo = footprint(o);
+        const og = roomGrid(s, zone);
+        const op = freeSpot(free(zone, o.id), fo.w, fo.h, og.cols, og.rows, [{ x: px + last.joinedOffX, y: py + last.joinedOffY }]);
+        growRoom(s, zone, { ...op, w: fo.w, h: fo.h });
+        Object.assign(o, { active: true, zone, posX: op.x, posY: op.y });
+      }
       const order = activeFor(t.id);
       if (order) order.tableLabel = t.label;
       return tableView(t);
@@ -255,7 +319,9 @@ function handle(s: Store, method: string, parts: string[], b: any, query: URLSea
     if (method === 'PATCH') {
       if (b.label !== undefined) { const label = String(b.label).trim() || fail('El nombre de la mesa no puede estar vacío'); checkLabel(label, t.id); t.label = label; const o = activeFor(t.id); if (o) o.tableLabel = label; }
       for (const k of ['zone', 'seats', 'shape', 'posX', 'posY'] as const) if (b[k] !== undefined) (t as any)[k] = b[k];
-      if (!Number.isInteger(t.seats) || t.seats < 1 || t.seats > 20) fail('Número de comensales no válido (1-20)');
+      const joined = (t.mergedFrom?.length ?? 0) > 0;
+      if (!Number.isInteger(t.seats) || t.seats < 1 || t.seats > (joined ? 200 : 20)) fail('Número de comensales no válido (1-20)');
+      if (joined) { t.shape = 'rect'; return tableView(t); } // la unión conserva su tamaño hasta separarla
       const isRound = t.shape === 'round', isSquare = t.shape === 'square', isRect = t.shape === 'rect';
       const rect = isRect ? rectMeasures(b, t) : undefined;
       t.diameterCm = isRound ? roundDiameter(b.diameterCm ?? t.diameterCm ?? 90) : undefined;

@@ -42,22 +42,12 @@ export class LossesController {
         b.occurredAt || new Date().toISOString().slice(0, 10), b.notes?.trim() || null, s.userId])).rows[0]);
   }
 
-  /** Importa los descuadres de cierre con su signo y la fecha de negocio. */
+  /** Los descuadres se leen directamente de los cierres: no hay imports manuales ni duplicados. */
   @Post('losses/sync-cash') async syncCash(@Req() req: AuthRequest) {
     const s = this.session(req, true);
     return this.db.tenant(req, async c => {
-      const rows = (await c.query('SELECT id,business_date "businessDate",cash_difference "difference",closed_by "closedBy" FROM cash_closures WHERE tenant_id=$1 AND abs(cash_difference)>0.001', [s.tenantId])).rows;
-      let created = 0;
-      for (const r of rows) {
-        const sign = Number(r.difference) > 0 ? 'sobrante' : 'descuadre';
-        const res = await c.query(`INSERT INTO loss_entries(tenant_id,description,amount,signed_amount,reason,source_type,source_id,occurred_at,notes,created_by)
-          VALUES($1,$2,$3,$4,'count_error','cash',$5,$6,$7,$8)
-          ON CONFLICT (tenant_id,source_type,source_id) DO NOTHING RETURNING id`,
-          [s.tenantId, `Cierre ${r.businessDate} · ${sign}`, Math.abs(Number(r.difference)), Number(r.difference), r.id, r.businessDate,
-            'Diferencia entre efectivo contado y esperado', r.closedBy || s.userId]);
-        created += res.rowCount ?? 0;
-      }
-      return { created };
+      await c.query("DELETE FROM loss_entries WHERE tenant_id=$1 AND source_type='cash'", [s.tenantId]);
+      return { created: 0, automatic: true };
     });
   }
 
@@ -79,8 +69,19 @@ export class LossesController {
           le.description "productName",u.full_name "employeeName",le.source_type "sourceType",le.notes
         FROM loss_entries le LEFT JOIN users u ON u.id=le.created_by
         WHERE le.tenant_id=$1 AND le.occurred_at >= $2::date AND le.occurred_at < $3::date
-          AND ($4::boolean=false OR (le.source_type='cash' AND le.created_by=$5))`, [s.tenantId, f, next.toISOString().slice(0, 10), cashier, s.userId])).rows;
-      const lines = [...movements.map(m => ({ ...m, origin: 'stock' })), ...entries.map(e => ({ ...e, origin: 'entry' }))]
+          AND le.source_type<>'cash'
+          AND ($4::boolean=false OR le.created_by=$5)`, [s.tenantId, f, next.toISOString().slice(0, 10), cashier, s.userId])).rows;
+      const closures = (await c.query(`SELECT cc.id,cc.business_date "date",cc.cash_difference "difference",u.full_name "employeeName"
+        FROM cash_closures cc LEFT JOIN users u ON u.id=cc.closed_by
+        WHERE cc.tenant_id=$1 AND cc.business_date >= $2::date AND cc.business_date < $3::date
+          AND abs(cc.cash_difference)>0.001 AND ($4::boolean=false OR cc.closed_by=$5)`,
+        [s.tenantId, f, next.toISOString().slice(0, 10), cashier, s.userId])).rows;
+      const cashLines = closures.map(r => ({
+        id: r.id, date: r.date, reason: 'count_error', amount: round(Math.abs(Number(r.difference))),
+        signedAmount: round(Number(r.difference)), productName: `Cierre ${r.date}`, employeeName: r.employeeName,
+        sourceType: 'cash', notes: 'Diferencia entre efectivo contado y esperado', origin: 'cash'
+      }));
+      const lines = [...movements.map(m => ({ ...m, origin: 'stock' })), ...entries.map(e => ({ ...e, origin: 'entry' })), ...cashLines]
         .filter(l => Number(l.amount) > 0);
       const byReason = Object.entries(lines.reduce((acc: Record<string, number>, l) => { acc[l.reason] = (acc[l.reason] || 0) + Number(l.amount); return acc; }, {}))
         .map(([reason, amount]) => ({ reason, amount: round(amount) })).sort((a, b) => b.amount - a.amount);

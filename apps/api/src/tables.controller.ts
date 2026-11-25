@@ -2,20 +2,24 @@ import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get,
 import { interval, map, Observable } from 'rxjs';
 import { ApiTags } from '@nestjs/swagger';
 import { DbService, AuthRequest } from './db.service';
+import { DEFAULT_COLS, DEFAULT_ROWS, Rect, extent, freeSpot, joinedRect } from './floor-layout';
 
 const SHAPES = ['square', 'round', 'bar', 'rect'];
 const SIDES = ['long1', 'long2', 'short1', 'short2'];
 type Side = typeof SIDES[number];
 const ROUND: [number, number][] = [[70, 3], [90, 4], [120, 8], [150, 10]];
 const SQUARE: [number, number][] = [[70, 2], [80, 4], [90, 4], [100, 6], [120, 8]];
+const CM_PER_CELL = 40;
 type TableBody = {
   label?: string; zone?: string; seats?: number; shape?: string; posX?: number; posY?: number;
   diameterCm?: number; widthCm?: number; heightCm?: number; sidesUsed?: Side[];
 };
 /** Estado de la mesa antes de una unión, para poder separarla después. */
 export type JoinSnapshot = {
-  joinedId: string; label: string; seats: number; shape: string; spanX: number; spanY: number;
+  joinedId: string; joinedZone?: string; label: string; seats: number; shape: string; spanX: number; spanY: number;
   offX: number; offY: number; joinedOffX: number; joinedOffY: number;
+  diameterCm: number | null; widthCm: number | null; heightCm: number | null;
+  sidesUsed: Side[]; seatsRecommended: number | null;
 };
 type TableRow = {
   id: string; label: string; zone: string; seats: number; shape: string; posX: number; posY: number;
@@ -31,6 +35,14 @@ const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(mi
 const closest = (table: [number, number][], value: number) =>
   table.reduce((best, item) => Math.abs(item[0] - value) < Math.abs(best[0] - value) ? item : best)[1];
 const num = (value: unknown, fallback: number) => value === undefined || value === null || value === '' ? fallback : Number(value);
+
+/** Casillas de 40 cm que ocupa una mesa en el plano (igual que el cliente): la unida usa sus span, la suelta sus medidas. */
+function footprint(t: { posX: number; posY: number; shape: string; spanX: number; spanY: number; diameterCm: number | null; widthCm: number | null; heightCm: number | null; mergedFrom?: unknown[] }): Rect {
+  const joined = (t.mergedFrom?.length ?? 0) > 0 || t.spanX > 1 || t.spanY > 1;
+  const wCm = joined ? t.spanX * CM_PER_CELL : t.shape === 'round' ? Number(t.diameterCm) || 90 : Number(t.widthCm) || (t.shape === 'bar' ? 120 : 80);
+  const hCm = joined ? t.spanY * CM_PER_CELL : t.shape === 'round' ? Number(t.diameterCm) || 90 : Number(t.heightCm) || (t.shape === 'bar' ? 60 : 80);
+  return { x: t.posX, y: t.posY, w: Math.max(1, Math.round(wCm / CM_PER_CELL), t.spanX || 1), h: Math.max(1, Math.round(hCm / CM_PER_CELL), t.spanY || 1) };
+}
 
 /** "Mesa 1" + "Mesa 2" → "Mesa 1+2"; si no comparten prefijo, "Terraza 1 + Barra". */
 export function joinedLabel(first: string, second: string) {
@@ -73,6 +85,8 @@ export class TablesController {
       if (!sides.length) throw new BadRequestException('Marca al menos un lado de la mesa');
       const longs = sides.filter(s => s.startsWith('long')).length;
       recommended = clamp(Math.floor(width / 60) * longs + (sides.length - longs), 1, 20);
+    } else if (shape === 'bar') {
+      width = 120; height = 60; sides = ['long1']; recommended = 2;
     }
     const seats = b.seats ?? current?.seats ?? recommended ?? 4;
     if (!Number.isInteger(seats) || seats < 1 || seats > 20) throw new BadRequestException('Número de comensales no válido (1-20)');
@@ -89,6 +103,27 @@ export class TablesController {
   private duplicate(e: unknown): never {
     if ((e as { code?: string }).code === '23505') throw new BadRequestException('Ya existe una mesa con ese nombre');
     throw e;
+  }
+  /** Toda mesa proviene de una sala activa; se tolera el modo legacy sin salas creadas. */
+  private async resolveRoom(c: any, tenant: string, zone?: string) {
+    if (!zone) return null;
+    const room = (await c.query('SELECT id FROM rooms WHERE tenant_id=$1 AND lower(name)=lower($2) AND active', [tenant, zone])).rows[0];
+    if (room) return room.id;
+    const any = (await c.query('SELECT 1 FROM rooms WHERE tenant_id=$1 AND active LIMIT 1', [tenant])).rows[0];
+    if (!any) return null;
+    throw new BadRequestException(`La sala «${zone}» no existe; créala en «Editar plano» antes de usarla`);
+  }
+  /** Mesas de la sala (salvo las excluidas, en casillas) y tamaño del plano en casillas. */
+  private async zoneGrid(c: any, tenant: string, zone: string, exclude: string[]) {
+    const all: TableRow[] = (await c.query(`${SELECT_JOIN} FROM dining_tables WHERE tenant_id=$1 AND zone=$2 AND active`, [tenant, zone])).rows;
+    const room = (await c.query('SELECT width_cm "w",height_cm "h" FROM rooms WHERE tenant_id=$1 AND lower(name)=lower($2) AND active', [tenant, zone])).rows[0];
+    const others = all.filter(t => !exclude.includes(t.id)).map(footprint);
+    return { others, cols: room ? Math.ceil(room.w / CM_PER_CELL) : DEFAULT_COLS, rows: room ? Math.ceil(room.h / CM_PER_CELL) : DEFAULT_ROWS };
+  }
+  /** Si una mesa no cabe en la sala, la sala crece hasta que quepa (máximo 100 m). */
+  private async growRoom(c: any, tenant: string, zone: string, r: Rect) {
+    await c.query(`UPDATE rooms SET width_cm=least(10000,greatest(width_cm,$3::int)),height_cm=least(10000,greatest(height_cm,$4::int))
+      WHERE tenant_id=$1 AND lower(name)=lower($2) AND active`, [tenant, zone, (r.x + r.w) * CM_PER_CELL, (r.y + r.h) * CM_PER_CELL]);
   }
 
   /** Eventos de cambio del mapa: el cliente recarga el estado al recibirlos. */
@@ -150,12 +185,12 @@ export class TablesController {
     const m = this.measures(shape, b);
     return this.db.tenant(req, async c => {
       const zone = b.zone?.trim() || 'Salón';
-      const room = (await c.query('SELECT id FROM rooms WHERE tenant_id=$1 AND lower(name)=lower($2)', [s.tenantId, zone])).rows[0];
+      const roomId = await this.resolveRoom(c, s.tenantId, zone);
       try {
         return (await c.query(`INSERT INTO dining_tables
           (tenant_id,label,zone,room_id,seats,shape,pos_x,pos_y,diameter_cm,width_cm,height_cm,sides_used,seats_recommended)
           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13) RETURNING ${COLUMNS}, ${WARNING}`,
-          [s.tenantId, b.label!.trim(), zone, room?.id ?? null, m.seats, shape, b.posX ?? 0, b.posY ?? 0,
+          [s.tenantId, b.label!.trim(), zone, roomId, m.seats, shape, b.posX ?? 0, b.posY ?? 0,
             m.diameter, m.width, m.height, JSON.stringify(m.sides), m.recommended])).rows[0];
       } catch (e) { this.duplicate(e); }
     });
@@ -165,11 +200,16 @@ export class TablesController {
     const s = this.session(req, ['admin', 'manager']);
     this.validate(b, true);
     return this.db.tenant(req, async c => {
-      const room = b.zone ? (await c.query('SELECT id FROM rooms WHERE tenant_id=$1 AND lower(name)=lower($2)', [s.tenantId, b.zone.trim()])).rows[0] : null;
+      const roomId = b.zone ? await this.resolveRoom(c, s.tenantId, b.zone.trim()) : null;
       const current: TableRow | undefined = (await c.query(`SELECT ${COLUMNS} FROM dining_tables WHERE tenant_id=$1 AND id=$2 AND active`, [s.tenantId, id])).rows[0];
       if (!current) throw new BadRequestException('Mesa no encontrada');
-      const shape = b.shape ?? current.shape;
-      const m = this.measures(shape, b, current);
+      // Una mesa unida conserva el tamaño de la unión: solo se cambian nombre, sala, plazas y posición.
+      const joined = (current as TableRow & { joinedCount: number }).joinedCount > 0;
+      if (joined && b.seats !== undefined && (!Number.isInteger(b.seats) || b.seats < 1 || b.seats > 200)) throw new BadRequestException('Número de comensales no válido');
+      const shape = joined ? current.shape : b.shape ?? current.shape;
+      const m = joined
+        ? { seats: b.seats ?? current.seats, diameter: current.diameterCm, width: current.widthCm, height: current.heightCm, sides: current.sidesUsed ?? [], recommended: current.seatsRecommended }
+        : this.measures(shape, b, current);
       try {
         const r = await c.query(`UPDATE dining_tables SET label=coalesce($3,label),zone=coalesce($4,zone),
             room_id=coalesce($14,room_id),seats=$5,shape=$6,
@@ -177,7 +217,7 @@ export class TablesController {
             sides_used=$12::jsonb,seats_recommended=$13
           WHERE tenant_id=$1 AND id=$2 AND active RETURNING ${COLUMNS}, ${WARNING}`,
           [s.tenantId, id, b.label?.trim() ?? null, b.zone?.trim() || null, m.seats, shape, b.posX ?? null, b.posY ?? null,
-            m.diameter, m.width, m.height, JSON.stringify(m.sides), m.recommended, room?.id ?? null]);
+            m.diameter, m.width, m.height, JSON.stringify(m.sides), m.recommended, roomId]);
         if (b.label) await c.query("UPDATE orders SET table_label=$3 WHERE tenant_id=$1 AND table_id=$2 AND status IN ('open','pending_approval','sent')", [s.tenantId, id, r.rows[0].label]);
         return r.rows[0];
       } catch (e) { this.duplicate(e); }
@@ -195,7 +235,11 @@ export class TablesController {
     });
   }
 
-  /** Une dos mesas contiguas y alineadas; la comanda abierta pasa a la mesa unida. */
+  /**
+   * Une dos mesas cualesquiera (redonda, cuadrada, rectangular o barra, estén donde estén). La mesa unida es rectangular,
+   * ocupa el espacio de las dos y suma sus plazas: si estaban juntas y alineadas se fusionan en su sitio; si no, se coloca
+   * donde estaba la mesa destino o en el primer hueco libre, y la sala crece si no cabe. La comanda abierta pasa a la mesa unida.
+   */
   @Post(':id/join') async join(@Req() req: AuthRequest, @Param('id') id: string, @Body() b: { withId?: string }) {
     const s = this.session(req, ['admin', 'manager']);
     if (!b?.withId || b.withId === id) throw new BadRequestException('Elige otra mesa para unir');
@@ -204,30 +248,34 @@ export class TablesController {
         WHERE tenant_id=$1 AND id = ANY($2::uuid[]) AND active FOR UPDATE`, [s.tenantId, [id, b.withId]])).rows;
       const a = rows.find(r => r.id === id), o = rows.find(r => r.id === b.withId);
       if (!a || !o) throw new BadRequestException('Mesa no encontrada');
-      if (a.zone !== o.zone) throw new BadRequestException('Solo se pueden unir mesas de la misma zona');
-      const horizontal = a.posY === o.posY && a.spanY === o.spanY && (a.posX + a.spanX === o.posX || o.posX + o.spanX === a.posX);
-      const vertical = a.posX === o.posX && a.spanX === o.spanX && (a.posY + a.spanY === o.posY || o.posY + o.spanY === a.posY);
-      if (!horizontal && !vertical) throw new BadRequestException('Las mesas deben estar juntas y alineadas para formar una mesa rectangular');
       const orders = (await c.query("SELECT id FROM orders WHERE tenant_id=$1 AND table_id = ANY($2::uuid[]) AND status IN ('open','pending_approval','sent') FOR UPDATE", [s.tenantId, [a.id, o.id]])).rows;
       if (orders.length > 1) throw new BadRequestException('Las dos mesas tienen comanda abierta; cobra una antes de unirlas');
 
-      const ux = Math.min(a.posX, o.posX), uy = Math.min(a.posY, o.posY);
+      const fa = footprint(a), fo = footprint(o);
+      // Una mesa de otra sala no ocupa sitio en esta: solo aporta su tamaño.
+      const g = await this.zoneGrid(c, s.tenantId, a.zone, [a.id, o.id]);
+      const u = joinedRect(fa, o.zone === a.zone ? fo : { ...fo, x: -1000, y: -1000 }, g.others, g.cols, g.rows);
+      if (u.x + u.w > g.cols || u.y + u.h > g.rows) await this.growRoom(c, s.tenantId, a.zone, u);
       const [first, second] = a.posX + a.posY <= o.posX + o.posY ? [a, o] : [o, a];
       const label = joinedLabel(first.label, second.label);
-      const snapshot: JoinSnapshot = { joinedId: o.id, label: a.label, seats: a.seats, shape: a.shape, spanX: a.spanX, spanY: a.spanY,
-        offX: a.posX - ux, offY: a.posY - uy, joinedOffX: o.posX - ux, joinedOffY: o.posY - uy };
+      const snapshot: JoinSnapshot = { joinedId: o.id, joinedZone: o.zone, label: a.label, seats: a.seats, shape: a.shape, spanX: a.spanX, spanY: a.spanY,
+        offX: a.posX - u.x, offY: a.posY - u.y, joinedOffX: o.posX - u.x, joinedOffY: o.posY - u.y,
+        diameterCm: a.diameterCm, widthCm: a.widthCm, heightCm: a.heightCm, sidesUsed: a.sidesUsed ?? [], seatsRecommended: a.seatsRecommended };
+      const jointSeats = a.seats + o.seats;
       await c.query('UPDATE dining_tables SET active=false WHERE tenant_id=$1 AND id=$2', [s.tenantId, o.id]);
       try {
-        const r = await c.query(`UPDATE dining_tables SET label=$3,seats=$4,shape='rect',pos_x=$5,pos_y=$6,span_x=$7,span_y=$8,merged_from=merged_from || $9::jsonb
+        const r = await c.query(`UPDATE dining_tables SET label=$3,seats=$4,shape='rect',pos_x=$5,pos_y=$6,span_x=$7,span_y=$8,
+            seats_recommended=least(200,$9::int),diameter_cm=NULL,width_cm=$10,height_cm=$11,merged_from=merged_from || $12::jsonb
           WHERE tenant_id=$1 AND id=$2 RETURNING ${COLUMNS}, ${WARNING}`,
-          [s.tenantId, a.id, label, a.seats + o.seats, ux, uy, horizontal ? a.spanX + o.spanX : a.spanX, vertical ? a.spanY + o.spanY : a.spanY, JSON.stringify([snapshot])]);
+          [s.tenantId, a.id, label, jointSeats, u.x, u.y, u.w, u.h, jointSeats,
+            u.w * CM_PER_CELL, u.h * CM_PER_CELL, JSON.stringify([snapshot])]);
         await c.query("UPDATE orders SET table_id=$2,table_label=$4 WHERE tenant_id=$1 AND table_id = ANY($3::uuid[]) AND status IN ('open','pending_approval','sent')", [s.tenantId, a.id, [a.id, o.id], label]);
         return r.rows[0];
       } catch (e) { this.duplicate(e); }
     });
   }
 
-  /** Deshace la última unión: la mesa recupera su forma y la otra vuelve a su sitio. */
+  /** Deshace la última unión: cada mesa vuelve a su sitio, o al hueco libre más cercano si ya está ocupado. */
   @Post(':id/split') async split(@Req() req: AuthRequest, @Param('id') id: string) {
     const s = this.session(req, ['admin', 'manager']);
     return this.db.tenant(req, async c => {
@@ -235,12 +283,28 @@ export class TablesController {
       if (!t) throw new BadRequestException('Mesa no encontrada');
       const last = t.mergedFrom[t.mergedFrom.length - 1];
       if (!last) throw new BadRequestException('Esta mesa no está unida a otra');
+      const o: TableRow | undefined = (await c.query(`${SELECT_JOIN} FROM dining_tables WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, [s.tenantId, last.joinedId])).rows[0];
+      const g = await this.zoneGrid(c, s.tenantId, t.zone, [t.id]);
+      const ft = footprint({ ...last, posX: 0, posY: 0, mergedFrom: t.mergedFrom.slice(0, -1) });
+      const tp = freeSpot(g.others, ft.w, ft.h, g.cols, g.rows, [{ x: t.posX + last.offX, y: t.posY + last.offY }, { x: t.posX, y: t.posY }]);
+      await this.growRoom(c, s.tenantId, t.zone, { ...tp, w: ft.w, h: ft.h });
       try {
-        const r = await c.query(`UPDATE dining_tables SET label=$3,seats=$4,shape=$5,span_x=$6,span_y=$7,pos_x=$8,pos_y=$9,merged_from=merged_from - (jsonb_array_length(merged_from)-1)
+        const r = await c.query(`UPDATE dining_tables SET label=$3,seats=$4,shape=$5,span_x=$6,span_y=$7,pos_x=$8,pos_y=$9,
+            diameter_cm=$10,width_cm=$11,height_cm=$12,sides_used=$13::jsonb,seats_recommended=$14,
+            merged_from=merged_from - (jsonb_array_length(merged_from)-1)
           WHERE tenant_id=$1 AND id=$2 RETURNING ${COLUMNS}, ${WARNING}`,
-          [s.tenantId, id, last.label, last.seats, last.shape, last.spanX, last.spanY, t.posX + last.offX, t.posY + last.offY]);
-        await c.query('UPDATE dining_tables SET active=true,zone=$3,pos_x=$4,pos_y=$5 WHERE tenant_id=$1 AND id=$2 AND NOT active',
-          [s.tenantId, last.joinedId, t.zone, t.posX + last.joinedOffX, t.posY + last.joinedOffY]);
+          [s.tenantId, id, last.label, last.seats, last.shape, last.spanX, last.spanY, tp.x, tp.y,
+            last.diameterCm, last.widthCm, last.heightCm, JSON.stringify(last.sidesUsed ?? []), last.seatsRecommended]);
+        if (o) {
+          const zone = last.joinedZone ?? t.zone;
+          const og = zone === t.zone ? { ...g, others: [...g.others, { ...tp, w: ft.w, h: ft.h }] } : await this.zoneGrid(c, s.tenantId, zone, [o.id]);
+          const fo = footprint(o);
+          const op = freeSpot(og.others, fo.w, fo.h, og.cols, og.rows, [{ x: t.posX + last.joinedOffX, y: t.posY + last.joinedOffY }]);
+          await this.growRoom(c, s.tenantId, zone, { ...op, w: fo.w, h: fo.h });
+          const roomId = await this.resolveRoom(c, s.tenantId, zone);
+          await c.query('UPDATE dining_tables SET active=true,zone=$3,room_id=coalesce($6,room_id),pos_x=$4,pos_y=$5 WHERE tenant_id=$1 AND id=$2 AND NOT active',
+            [s.tenantId, o.id, zone, op.x, op.y, roomId]);
+        }
         await c.query("UPDATE orders SET table_label=$3 WHERE tenant_id=$1 AND table_id=$2 AND status IN ('open','pending_approval','sent')", [s.tenantId, id, last.label]);
         return r.rows[0];
       } catch (e) { this.duplicate(e); }
@@ -248,4 +312,5 @@ export class TablesController {
   }
 }
 
-const SELECT_JOIN = `id,label,zone,seats,shape,pos_x "posX",pos_y "posY",span_x "spanX",span_y "spanY",merged_from "mergedFrom"`;
+const SELECT_JOIN = `id,label,zone,seats,shape,pos_x "posX",pos_y "posY",span_x "spanX",span_y "spanY",merged_from "mergedFrom",
+  diameter_cm "diameterCm",width_cm "widthCm",height_cm "heightCm",sides_used "sidesUsed",seats_recommended "seatsRecommended"`;

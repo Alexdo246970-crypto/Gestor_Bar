@@ -233,7 +233,7 @@ export class PurchasesController {
         const vat = deductible ? Number(p.vat_total) : 0;
         await c.query(`INSERT INTO ledger_entries(tenant_id,entry_date,entry_type,category,account,amount_net,vat,total,source_type,source_id,reference,notes,created_by)
           VALUES($1,$2,'expense','compras',$3,$4,$5,$6,'purchase',$7,$8,$9,$10)
-          ON CONFLICT (tenant_id,source_type,source_id) DO NOTHING`,
+          ON CONFLICT (tenant_id,source_type,source_id,account) DO NOTHING`,
           [s.tenantId, p.invoice_date, p.payment_method === 'card' ? 'bank' : 'cash', p.net_total, vat, round(Number(p.net_total) + vat),
             id, p.invoice_number, deductible ? null : 'IVA no deducible', s.userId]);
       }
@@ -257,6 +257,10 @@ export class PurchasesController {
       const paid = round(Number(p.paid_amount) + amount);
       const paymentStatus = paid + 0.001 >= Number(p.gross_total) ? 'paid' : 'partial';
       await c.query('UPDATE purchases SET paid_amount=$3,payment_status=$4 WHERE tenant_id=$1 AND id=$2', [s.tenantId, id, paid, paymentStatus]);
+      // El saldo pendiente deja de comprometer tesorería a medida que se paga.
+      await c.query(`UPDATE treasury_commitments SET amount=$3,paid=$4,paid_at=CASE WHEN $4 THEN now() ELSE paid_at END
+        WHERE tenant_id=$1 AND source_type='purchase' AND source_id=$2 AND NOT paid`,
+        [s.tenantId, id, Math.max(0, round(Number(p.gross_total) - paid)), paymentStatus === 'paid']);
       return { paidAmount: paid, paymentStatus, pendingAmount: round(Number(p.gross_total) - paid) };
     });
   }

@@ -3,7 +3,7 @@ import { DEMO, euro, request } from './lib';
 
 type Employee = { id: string; name: string; taxId: string | null; position: string | null; leftAt: string | null; paymentAccount: string | null };
 type Entry = { id: string; month: string; status: string; gross: number; net: number; socialSecurityCompany: number; socialSecurityWorker: number; irpfWithheld: number; otherConcepts: number; paymentDate: string | null; paidAt: string | null; employeeId: string; employeeName: string; position: string | null };
-type Result = { lines: Entry[]; totals: { gross: number; net: number; socialSecurityCompany: number; cost: number } };
+type Result = { lines?: Entry[]; totals: { gross: number; net: number; socialSecurityCompany: number; cost: number } };
 
 export function SalariesView({ canManage }: { canManage: boolean }) {
   const [month, setMonth] = useState(new Date().toLocaleDateString('en-CA').slice(0, 7));
@@ -11,10 +11,11 @@ export function SalariesView({ canManage }: { canManage: boolean }) {
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [showEmployee, setShowEmployee] = useState(false), [showSalary, setShowSalary] = useState(false);
 
   async function load() {
-    if (DEMO) { setEmployees([]); setData({ lines: [], totals: { gross: 0, net: 0, socialSecurityCompany: 0, cost: 0 } }); return; }
+    if (DEMO) { setEmployees([]); setData({ lines: canManage ? [] : undefined, totals: { gross: 0, net: 0, socialSecurityCompany: 0, cost: 0 } }); return; }
     try {
-      const [staff, payroll] = await Promise.all([request<Employee[]>('/employees'), request<Result>(`/salaries?month=${month}`)]);
-      setEmployees(staff); setData(payroll);
+      const payroll = await request<Result>(`/salaries?month=${month}`);
+      setData(payroll);
+      if (canManage) setEmployees(await request<Employee[]>('/employees'));
     } catch (e) { setError((e as Error).message); }
   }
   useEffect(() => { void load(); }, [month]);
@@ -41,27 +42,27 @@ export function SalariesView({ canManage }: { canManage: boolean }) {
 
   const active = employees.filter(e => !e.leftAt || e.leftAt.slice(0, 7) >= month);
   return <section className="finance-page">
-    <div className="section-head"><div><h3>Nóminas y personal</h3><p>Coste real de plantilla y su efecto en cuentas</p></div>
+    <div className="section-head"><div><h3>Nóminas y personal</h3><p>{canManage ? 'Coste real de plantilla y su efecto en cuentas' : 'Totales de plantilla; el detalle nominativo está restringido'}</p></div>
       {canManage && !DEMO && <><button className="secondary" onClick={() => setShowEmployee(true)}>＋ Empleado</button> <button className="primary" onClick={() => setShowSalary(true)}>＋ Nómina</button></>}</div>
     {error && <div className="toast" onClick={() => setError('')}>{error} ×</div>}
     {notice && <div className="order-notice" onClick={() => setNotice('')}>✓ {notice}</div>}
     <div className="finance-period"><label>Mes<input type="month" value={month} onChange={e => setMonth(e.target.value)} /></label><span>Las bajas posteriores al mes siguen apareciendo en el histórico</span></div>
     <div className="kpi-grid">
-      <article><span>Bruto</span><strong>{euro(data?.totals.gross ?? 0)}</strong><small>{data?.lines.length ?? 0} nóminas</small></article>
+      <article><span>Bruto</span><strong>{euro(data?.totals.gross ?? 0)}</strong><small>{data?.lines?.length ?? 0} nóminas</small></article>
       <article><span>SS empresa</span><strong>{euro(data?.totals.socialSecurityCompany ?? 0)}</strong><small>coste adicional</small></article>
       <article><span>Coste de plantilla</span><strong>{euro(data?.totals.cost ?? 0)}</strong><small>Neto {euro(data?.totals.net ?? 0)}</small></article>
     </div>
-    <div className="salary-grid"><section><div className="section-head"><div><h3>Empleados</h3><p>{active.length} activos en el periodo</p></div></div>
+    {canManage ? <div className="salary-grid"><section><div className="section-head"><div><h3>Empleados</h3><p>{active.length} activos en el periodo</p></div></div>
       <div className="ledger-lines">{employees.map(e => <div key={e.id} className="ledger-line"><span>{e.name}</span><small>{e.position || 'Sin puesto'}{e.leftAt ? ` · baja ${e.leftAt}` : ''}</small><b>{e.taxId || '—'}</b></div>)}{!employees.length && <p className="finance-note">Aún no hay empleados registrados.</p>}</div>
     </section><section><div className="section-head"><div><h3>Nóminas de {month}</h3><p>El neto se calcula automáticamente</p></div></div>
-      <div className="ledger-lines">{data?.lines.map(s => <div key={s.id} className="salary-line">
+      <div className="ledger-lines">{data?.lines?.map(s => <div key={s.id} className="salary-line">
         <strong>{s.employeeName}</strong><span>{s.status === 'draft' ? 'Borrador' : s.status === 'paid' ? 'Pagada' : s.status === 'void' ? 'Anulada' : 'Confirmada'}</span>
         <small>Bruto {euro(s.gross)}</small><small>Net {euro(s.net)}</small><small>Coste {euro(s.gross + s.socialSecurityCompany)}</small>
-        {canManage && !DEMO && s.status === 'draft' && <button className="secondary" onClick={() => void act(`/salaries/${s.id}/confirm`)}>Confirmar</button>}
-        {canManage && !DEMO && s.status === 'confirmed' && <button className="secondary" onClick={() => void act(`/salaries/${s.id}/pay`, { paidAt: new Date().toLocaleDateString('en-CA') })}>Marcar pagada</button>}
-        {canManage && !DEMO && ['confirmed', 'paid'].includes(s.status) && <button className="remove-button" onClick={() => { const reason = window.prompt('Motivo de la anulación'); if (reason) void act(`/salaries/${s.id}/void`, { reason }); }}>Anular</button>}
-      </div>)}{!data?.lines.length && <p className="finance-note">Sin nóminas en este mes.</p>}</div>
-    </section></div>
+        {!DEMO && s.status === 'draft' && <button className="secondary" onClick={() => void act(`/salaries/${s.id}/confirm`)}>Confirmar</button>}
+        {!DEMO && s.status === 'confirmed' && <button className="secondary" onClick={() => void act(`/salaries/${s.id}/pay`, { paidAt: new Date().toLocaleDateString('en-CA') })}>Marcar pagada</button>}
+        {!DEMO && ['confirmed', 'paid'].includes(s.status) && <button className="remove-button" onClick={() => { const reason = window.prompt('Motivo de la anulación'); if (reason) void act(`/salaries/${s.id}/void`, { reason }); }}>Anular</button>}
+      </div>)}{!data?.lines?.length && <p className="finance-note">Sin nóminas en este mes.</p>}</div>
+    </section></div> : <p className="finance-note">Acceso restringido a totales. Los importes agregados son los que se contabilizan en cuentas.</p>}
 
     {showEmployee && <div className="modal-backdrop"><form className="modal-card" onSubmit={addEmployee}>
       <div className="section-head"><div><h3>Nuevo empleado</h3><p>El vínculo con usuario es opcional</p></div></div>

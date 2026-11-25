@@ -70,6 +70,7 @@ export class TaxesController {
     const year = Number(b.year || new Date().getFullYear());
     if (!Number.isInteger(year) || year < 2000 || year > 2100) throw new BadRequestException('Año no válido');
     return this.db.tenant(req, async c => {
+      const tz = (await c.query('SELECT timezone FROM tenants WHERE id=$1', [s.tenantId])).rows[0]?.timezone || 'Europe/Madrid';
       const cfg = (await c.query('SELECT frequency,due_day "dueDay" FROM tax_settings WHERE tenant_id=$1', [s.tenantId])).rows[0] || { frequency: 'quarterly', dueDay: 20 };
       const step = cfg.frequency === 'monthly' ? 1 : 3;
       const created: string[] = [];
@@ -90,17 +91,21 @@ export class TaxesController {
         if (!r) continue;
         created.push(r.id);
         await c.query('DELETE FROM tax_period_entries WHERE tenant_id=$1 AND period_id=$2', [s.tenantId, r.id]);
-        const sources: [string, string, unknown][] = [
-          ['order', `SELECT id,closed_at at,net_total,vat_total FROM orders WHERE tenant_id=$2 AND status='paid' AND closed_at >= $3 AND closed_at < $4`, null],
-          ['purchase', `SELECT id,purchased_at at,net_total,vat_total FROM purchases WHERE tenant_id=$2 AND status='received' AND vat_deductible AND purchased_at >= $3 AND purchased_at < $4`, null],
-          ['expense', `SELECT id,expense_date at,net_amount net_total,vat_amount vat_total FROM expenses WHERE tenant_id=$2 AND vat_deductible AND expense_date >= $3::date AND expense_date < $4::date`, null]
+        // La fecha de operación se resuelve en la zona horaria del local antes de congelarla.
+        const sources: [string, string][] = [
+          ['order', `SELECT id,(closed_at AT TIME ZONE $5)::date "opDate",net_total,vat_total FROM orders
+             WHERE tenant_id=$2 AND status='paid' AND (closed_at AT TIME ZONE $5)::date >= $3::date AND (closed_at AT TIME ZONE $5)::date < $4::date`],
+          ['purchase', `SELECT id,(purchased_at AT TIME ZONE $5)::date "opDate",net_total,vat_total FROM purchases
+             WHERE tenant_id=$2 AND status='received' AND vat_deductible AND (purchased_at AT TIME ZONE $5)::date >= $3::date AND (purchased_at AT TIME ZONE $5)::date < $4::date`],
+          ['expense', `SELECT id,expense_date "opDate",net_amount net_total,vat_amount vat_total FROM expenses
+             WHERE tenant_id=$2 AND vat_deductible AND expense_date >= $3::date AND expense_date < $4::date`]
         ];
         for (const [sourceType, sql] of sources) {
-          const rows = (await c.query(sql, [s.tenantId, s.tenantId, start.toISOString(), end.toISOString()])).rows;
+          const rows = (await c.query(sql, [s.tenantId, s.tenantId, start.toISOString().slice(0, 10), end.toISOString().slice(0, 10), tz])).rows;
           for (const row of rows) {
             await c.query(`INSERT INTO tax_period_entries(tenant_id,period_id,source_type,source_id,operation_date,amount_net,vat,description)
               VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (tenant_id,period_id,source_type,source_id) DO NOTHING`,
-              [s.tenantId, r.id, sourceType, row.id, String(row.at).slice(0, 10), row.net_total, row.vat_total, sourceType]);
+              [s.tenantId, r.id, sourceType, row.id, row.opDate, row.net_total, row.vat_total, sourceType]);
           }
         }
       }
@@ -115,7 +120,9 @@ export class TaxesController {
       if (!row) throw new BadRequestException('Periodo no encontrado');
       const entries = (await c.query(`SELECT source_type "sourceType",source_id "sourceId",operation_date "operationDate",amount_net "amountNet",vat,description
         FROM tax_period_entries WHERE tenant_id=$1 AND period_id=$2 ORDER BY operation_date`, [req.session!.app!.tenantId, id])).rows;
-      return { ...row, entries };
+      // Los periodos cerrados no se recalculan, pero se muestra la diferencia con la facturación actual.
+      const current = row.status === 'open' ? null : await this.calculation(c, req.session!.app!.tenantId, row.start_date, row.end_date);
+      return { ...row, entries, currentResult: current?.result ?? null, difference: current ? round(current.result - Number(row.result)) : null };
     });
   }
 
@@ -130,7 +137,7 @@ export class TaxesController {
       if (result > 0) {
         await c.query(`INSERT INTO ledger_entries(tenant_id,entry_date,entry_type,category,account,amount_net,vat,total,source_type,source_id,reference,notes,created_by)
           VALUES($1,$2,'expense','Impuestos','bank',$3,0,$3,'tax_period',$4,$5,$6,$7)
-          ON CONFLICT (tenant_id,source_type,source_id) DO NOTHING`,
+          ON CONFLICT (tenant_id,source_type,source_id,account) DO NOTHING`,
           [s.tenantId, p.due_date, result, id, p.period_key, `Liquidación ${p.period_key}${b.notes ? ` · ${b.notes}` : ''}`, s.userId]);
       }
       await c.query("UPDATE tax_periods SET status='filed',filed_at=now(),notes=coalesce($3,notes) WHERE tenant_id=$1 AND id=$2", [s.tenantId, id, b.notes?.trim() || null]);
@@ -169,7 +176,7 @@ export class TaxesController {
       if (!t) throw new BadRequestException('Impuesto no encontrado o ya pagado');
       await c.query(`INSERT INTO ledger_entries(tenant_id,entry_date,entry_type,category,account,amount_net,vat,total,source_type,source_id,reference,notes,created_by)
         VALUES($1,$2,'expense','Impuestos','bank',$3,0,$3,'other_tax',$4,$5,$6,$7)
-        ON CONFLICT (tenant_id,source_type,source_id) DO NOTHING`,
+        ON CONFLICT (tenant_id,source_type,source_id,account) DO NOTHING`,
         [s.tenantId, t.due_date || new Date().toISOString().slice(0, 10), t.amount, id, t.reference, t.name, s.userId]);
       await c.query('UPDATE other_taxes SET paid=true,paid_at=now() WHERE tenant_id=$1 AND id=$2', [s.tenantId, id]);
       return { ok: true };

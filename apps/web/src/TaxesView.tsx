@@ -9,7 +9,7 @@ type Settings = { frequency: 'monthly' | 'quarterly'; vatRegime: string; dueDay:
 export function TaxesView({ canEdit }: { canEdit: boolean }) {
   const [settings, setSettings] = useState<Settings | null>(null), [periods, setPeriods] = useState<Period[]>([]), [others, setOthers] = useState<OtherTax[]>([]);
   const [alerts, setAlerts] = useState<{ periods: Alert[]; otherTaxes: Alert[] }>({ periods: [], otherTaxes: [] });
-  const [year, setYear] = useState(new Date().getFullYear()), [detail, setDetail] = useState<(Period & { entries: any[] }) | null>(null);
+  const [year, setYear] = useState(new Date().getFullYear()), [detail, setDetail] = useState<(Period & { entries: any[]; currentResult: number | null; difference: number | null }) | null>(null);
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [showOther, setShowOther] = useState(false);
 
   async function load() {
@@ -38,7 +38,7 @@ export function TaxesView({ canEdit }: { canEdit: boolean }) {
     setShowOther(false);
   }
   async function open(id: string) {
-    try { setDetail(await request<Period & { entries: any[] }>(`/tax/periods/${id}`)); } catch (e) { setError((e as Error).message); }
+    try { setDetail(await request<Period & { entries: any[]; currentResult: number | null; difference: number | null }>(`/tax/periods/${id}`)); } catch (e) { setError((e as Error).message); }
   }
 
   const hasAlerts = alerts.periods.length + alerts.otherTaxes.length > 0;
@@ -79,6 +79,7 @@ export function TaxesView({ canEdit }: { canEdit: boolean }) {
 
     {detail && <div className="modal-backdrop"><div className="modal-card"><div className="section-head"><div><h3>{detail.periodKey}</h3><p>{detail.startDate} – {detail.endDate} · vencimiento {detail.dueDate}</p></div><button className="secondary" onClick={() => setDetail(null)}>×</button></div>
       <p className="finance-note">Repercutido {euro(detail.outputVat)} − soportado {euro(detail.inputVat)} = {euro(detail.result)} · ajuste de redondeo {euro(detail.roundingAdjustment)}</p>
+      {detail.difference !== null && <p className="finance-note">Periodo cerrado: cálculo actual {euro(detail.currentResult ?? 0)} · diferencia {euro(detail.difference)} (el importe presentado no se modifica).</p>}
       <div className="ledger-lines">{detail.entries.map((entry, i) => <div key={i} className="ledger-line"><span>{entry.sourceType}</span><small>{entry.operationDate}</small><b>{euro(entry.vat)}</b></div>)}{!detail.entries.length && <p className="finance-note">Sin facturas incluidas.</p>}</div>
     </div></div>}
     {showOther && <div className="modal-backdrop"><form className="modal-card" onSubmit={addOther}>
