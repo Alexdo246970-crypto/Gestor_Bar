@@ -83,6 +83,10 @@ El plano mantiene los cuatro estados y la leyenda, y recibe los cambios de coman
 
 `ledger_entries` es el registro único: fecha de operación, tipo (`income`/`expense`), categoría, cuenta (`cash`/`bank`), base, IVA y total, con `source_type`/`source_id` y un índice único parcial que evita duplicar apuntes al reintentar. Cobrar una comanda genera un ingreso `ventas` con los totales históricos de la orden; recibir una compra genera un gasto `compras` con el IVA solo si es deducible. Los apuntes manuales exigen categoría, fecha e importe positivo y guardan el usuario. `GET /api/ledger?from=&to=&category=&account=` devuelve el detalle paginado, totales por tipo y desglose por categoría; el saldo del periodo es ingresos menos gastos con IVA. Consultan `admin`, `manager` y `cashier`; escriben `admin` y `manager`.
 
+### Resumen financiero (#31)
+
+`GET /api/reports/daily` acepta `date` con `period` (`day`, `week`, `month`, `year`; por defecto el mes en curso) o un rango libre `from`+`to` en formato `YYYY-MM-DD`. El rango exige ambas fechas, `from <= to` y un máximo de 2 años; cualquier otro caso devuelve 400 con un mensaje concreto. Todas las fechas de operación usan `tenants.timezone`. La respuesta mantiene los KPIs y desgloses anteriores (ventas, cobros, compras por proveedor, coste de ingredientes, gastos por categoría, presupuestos y liquidación estimada de IVA) y añade `kpis` y `comparison`: el periodo anterior tiene exactamente la misma duración y cada KPI muestra valor actual, anterior, variación absoluta en euros y variación porcentual (null cuando el anterior es 0, sin divisiones por cero). El resultado neto distingue margen bruto (ventas netas − consumo valorado de ingredientes), resultado operativo (margen bruto − gastos operativos − sueldos de `salary_entries` confirmados/pagados, si la tabla existe) y resultado neto (resultado operativo − impuestos de `tax_periods` presentados y `other_taxes` pagados, si existen). El saldo de IVA estimado se muestra aparte: es una obligación, no un gasto, y no se resta dos veces. `coherence` comprueba que la suma por proveedor cuadra con el total de compras, que los pagos cuadran con las ventas cobradas (tolerancia 0,02 €) y expone ingresos, gastos y saldo del libro `ledger_entries` del mismo rango junto al último arqueo de caja. `GET /api/reports/daily.csv?...` genera en servidor el mismo desglose (fecha, periodo, cada KPI con su comparativa, proveedores, categorías, pagos y totales del libro) en CSV con BOM para Excel en es-ES; el navegador permite además imprimir/PDF. Con datos vacíos todo se muestra a 0,00 €. Consultan `admin`, `manager` y `cashier`; `waiter` y `kitchen` reciben 403.
+
 ## Esquema SQL
 
 Las migraciones ejecutables `database/migrations/001_initial.sql` y `002_inventory_packages_and_vat.sql` crean locales, usuarios y membresías, categorías, carta, ingredientes con formato/precio de compra, recetas y extras compatibles, proveedores, facturas de compra y líneas, menús diarios, pedidos y detalle, pagos, movimientos de stock, cierres de caja, gastos operativos, presupuestos, sesiones, índices y políticas RLS. El runner registra versiones y aplica la segunda migración de forma incremental a instalaciones previas.
@@ -127,7 +131,8 @@ Cookie de sesión requerida en todos salvo el bootstrap y login. Roles: `admin` 
 | GET / POST | `/api/suppliers` | Listar/crear proveedores |
 | POST | `/api/expenses` | Registrar gasto operativo con base e IVA |
 | POST | `/api/budgets` | Crear o actualizar presupuesto mensual por categoría |
-| GET | `/api/reports/daily?date=YYYY-MM-DD` | Resumen diario de ventas, IVA, pagos, compras y margen estimado |
+| GET | `/api/reports/daily?date=YYYY-MM-DD&period=day\|week\|month\|year` o `?from=&to=` | Resumen financiero con comparativa, resultado neto y cuadres |
+| GET | `/api/reports/daily.csv?from=&to=` | CSV del mismo resumen para Excel |
 | POST | `/api/cash-closures` | Registrar arqueo y diferencia de caja |
 
 ## Arranque
