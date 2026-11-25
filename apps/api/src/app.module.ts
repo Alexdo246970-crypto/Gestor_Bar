@@ -17,6 +17,6 @@ import { TaxesController } from './taxes.controller';
 import { SalariesController } from './salaries.controller';
 import { PurchasesController, SuppliersController } from './purchases.controller';
 
-@Module({ controllers: [AuthController, CoreController, CatalogController, OrdersController, InventoryController, PurchasesController, SuppliersController, FinanceController, TablesController, LedgerController, RoomsController],
+@Module({ controllers: [AuthController, CoreController, CatalogController, OrdersController, InventoryController, PurchasesController, SuppliersController, FinanceController, TablesController, LedgerController, RoomsController, SalariesController, TaxesController, TreasuryController, IncomeController, LossesController],
   providers: [{ provide: 'PG_POOL', useFactory: () => new Pool({ connectionString: process.env.DATABASE_URL }) }, DbService] })
 export class AppModule {}
