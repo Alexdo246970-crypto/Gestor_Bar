@@ -2,7 +2,7 @@ import { Injectable, Inject } from '@nestjs/common';
 import { Pool, PoolClient, QueryResultRow } from 'pg';
 import { Request } from 'express';
 
-export interface AppSession { userId: string; tenantId: string; role: string; tenantName?: string }
+export interface AppSession { userId: string; tenantId: string; role: string; tenantName?: string; platformAdmin?: boolean }
 export type AuthRequest = Request & { session: Request['session'] & { app?: AppSession } };
 
 @Injectable()
