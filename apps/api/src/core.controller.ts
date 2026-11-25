@@ -180,7 +180,7 @@ export class CoreController {
       if (count.rows[0].n > 0) throw new BadRequestException('Setup ya completado');
       const t = await client.query('INSERT INTO tenants(slug,name) VALUES($1,$2) RETURNING id', [b.slug.toLowerCase(), b.tenantName]);
       await client.query("SELECT set_config('app.tenant_id',$1,true)", [t.rows[0].id]);
-      const u = await client.query('INSERT INTO users(email,password_hash,full_name) VALUES(lower($1),$2,$3) RETURNING id', [b.email, await argon2.hash(b.password), b.fullName]);
+      const u = await client.query('INSERT INTO users(email,password_hash,full_name,platform_admin) VALUES(lower($1),$2,$3,true) RETURNING id', [b.email, await argon2.hash(b.password), b.fullName]);
       await client.query("INSERT INTO tenant_users(tenant_id,user_id,role) VALUES($1,$2,'admin')", [t.rows[0].id, u.rows[0].id]);
       return { tenant: b.slug.toLowerCase(), user: b.email };
     });
