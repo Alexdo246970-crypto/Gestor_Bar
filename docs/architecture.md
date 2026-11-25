@@ -76,6 +76,14 @@ Las issues `#36`, `#37` y `#38` son la configuración/validación de cada forma;
 
 El plano mantiene los cuatro estados y la leyenda, y recibe los cambios de comanda por SSE: `GET /api/tables/events` emite `tables-changed` cada 5 s con la sesión de la cookie; el cliente recarga `GET /api/tables` al recibirlo. El polling de 30 s queda como respaldo si se cierra la conexión. En pantallas pequeñas el plano se sustituye por una lista de mesas con el mismo estado y el importe pendiente; las acciones táctiles usan botones grandes y el modo edición sigue restringido a `admin`/`manager`.
 
+### Visualización del mapa (#41)
+
+Maqueta acordada para el plano: pestaña de sala arriba, leyenda fija con contador por estado, plano a la izquierda y panel de mesa a la derecha; en móvil el panel pasa debajo y el plano se desplaza horizontalmente. Dos modos diferenciados por un botón permanente: **servicio** (abrir comanda y cobrar) y **edición** (mover, crear, renombrar y archivar), restringida a `admin`/`manager`.
+
+Estados y paleta: verde `libre`, ámbar `comanda sin enviar`, azul `en cocina/servida`, rojo `cobro parcial` (`reservada` queda fuera de alcance hasta aprobarla). El estado nunca se comunica solo con color: la etiqueta y el icono/texto acompañan al punto de la leyenda; se exige contraste AA sobre fondo claro.
+
+Interacción: arrastre para mover, confirmación visual al crear/mover y posibilidad de reintentar si la API rechaza el cambio; el zoom va del 50 % al 300 % en pasos del 25 % con botones `−`/`+` y un botón `Ajustar` que vuelve al 100 %. Los objetivos táctiles miden al menos 44 px y se separan para evitar dobles toques en tablet.
+
 ## Finanzas
 
 `GET /reports/daily` consulta pedidos pagados por fecha de cierre local, pagos por fecha local, facturas de proveedores recibidas y gastos operativos. Devuelve coste neto y bruto por proveedor, IVA de compra marcado como deducible, IVA deducible de gastos, IVA repercutido, estimación de liquidación, consumo de ingredientes, margen bruto, resultado operativo y ejecución de presupuestos. Cada ingrediente guarda formato (por ejemplo, pack de seis briks), cantidad base por paquete y precio neto por paquete. La recepción convierte paquetes a cantidades de inventario y actualiza el coste medio ponderado; los movimientos de venta guardan el coste aplicado. La fecha de negocio respeta `tenants.timezone`. Las líneas conservan precio e IVA históricos aunque cambie el catálogo. La liquidación de IVA es orientativa y debe verificarse con facturas y normativa.

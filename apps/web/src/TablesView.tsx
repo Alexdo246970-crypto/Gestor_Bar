@@ -37,7 +37,7 @@ export function canJoin(a: DiningTable, b: DiningTable) {
 
 /** Plano de sala: cada mesa muestra en tiempo real el estado de su comanda. */
 export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenInPos: (table: { id: string; label: string }) => void }) {
-  const [tables, setTables] = useState<DiningTable[]>([]), [rooms, setRooms] = useState<Room[]>([]), [zone, setZone] = useState(''), [selectedId, setSelectedId] = useState<string | null>(null), [detail, setDetail] = useState<OrderDetail | null>(null), [editMode, setEditMode] = useState(false), [paying, setPaying] = useState<string | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [draft, setDraft] = useState<{ posX: number; posY: number } | null>(null), [dragId, setDragId] = useState<string | null>(null), [pendingZone, setPendingZone] = useState<string | null>(null);
+  const [tables, setTables] = useState<DiningTable[]>([]), [rooms, setRooms] = useState<Room[]>([]), [zone, setZone] = useState(''), [selectedId, setSelectedId] = useState<string | null>(null), [detail, setDetail] = useState<OrderDetail | null>(null), [editMode, setEditMode] = useState(false), [paying, setPaying] = useState<string | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [draft, setDraft] = useState<{ posX: number; posY: number } | null>(null), [dragId, setDragId] = useState<string | null>(null), [pendingZone, setPendingZone] = useState<string | null>(null), [zoom, setZoom] = useState(1);
 
   async function load() {
     try {
@@ -162,7 +162,7 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
 
   return <section className="tables-page">
     <div className="section-head"><div><h3>Mapa de mesas</h3><p>Toca una mesa para abrir su comanda, añadir productos o cobrar</p></div>
-      <div className="tables-head-actions"><button className="secondary" onClick={() => void load()}>Actualizar ↻</button>{canEdit && <button className={editMode ? 'primary' : 'secondary'} onClick={() => { setEditMode(!editMode); setDraft(null); }}>{editMode ? 'Terminar edición' : '✎ Editar plano'}</button>}</div></div>
+      <div className="tables-head-actions"><button className="secondary" onClick={() => void load()}>Actualizar ↻</button><button className="secondary" onClick={() => setZoom(z => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))} aria-label="Reducir zoom">−</button><span className="zoom-label">{Math.round(zoom * 100)} %</span><button className="secondary" onClick={() => setZoom(z => Math.min(3, Math.round((z + 0.25) * 100) / 100))} aria-label="Aumentar zoom">＋</button><button className="secondary" onClick={() => setZoom(1)}>Ajustar</button>{canEdit && <button className={editMode ? 'primary' : 'secondary'} onClick={() => { setEditMode(!editMode); setDraft(null); }}>{editMode ? 'Terminar edición' : '✎ Editar plano'}</button>}</div></div>
     {error && <div className="toast" onClick={() => setError('')}>{error} ×</div>}
     {notice && <div className="order-notice" onClick={() => setNotice('')}>✓ {notice}</div>}
     <div className="table-stats">
@@ -175,9 +175,9 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
       {editMode && !DEMO && rooms.some(r => r.name === currentZone) && <button className="zone-add" onClick={() => void renameRoom()}>✎ Renombrar sala</button>}
       {editMode && !DEMO && rooms.some(r => r.name === currentZone) && <button className="zone-add" onClick={() => void archiveRoom()}>Archivar sala</button>}
     </div>
-    <div className="legend">{(['free', 'open', 'sent', 'partial'] as TableState[]).map(s => <span key={s}><i className={`dot ${s}`} />{STATE_LABEL[s]}</span>)}</div>
+    <div className="legend">{(['free', 'open', 'sent', 'partial'] as TableState[]).map(st => <span key={st}><i className={`dot ${st}`} />{STATE_LABEL[st]} <b>{tables.filter(t => t.zone === currentZone && tableState(t) === st).length}</b></span>)}</div>
     <div className="tables-layout">
-      <div className={`floor ${editMode ? 'editing' : ''}`} style={{ gridTemplateColumns: `repeat(${GRID_COLS}, minmax(0,1fr))` }}>
+      <div className="floor-scroll"><div className={`floor ${editMode ? 'editing' : ''}`} style={{ gridTemplateColumns: `repeat(${GRID_COLS}, minmax(0,1fr))`, transform: `scale(${zoom})`, transformOrigin: 'top left' }}>
         {cells.map(({ x, y, table }) => table
           ? <button key={table.id} draggable={editMode} onDragStart={() => setDragId(table.id)} onDragEnd={() => setDragId(null)}
               style={{ gridColumn: `${x + 1} / span ${spanX(table)}`, gridRow: `${y + 1} / span ${spanY(table)}` }}
@@ -191,7 +191,7 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
           : <div key={`${x}-${y}`} style={{ gridColumn: x + 1, gridRow: y + 1 }} className={`floor-cell ${draft && draft.posX === x && draft.posY === y ? 'draft' : ''}`} onClick={() => clickCell(x, y)}
               onDragOver={e => { if (editMode) e.preventDefault(); }} onDrop={e => { e.preventDefault(); if (dragId) void move(dragId, x, y); setDragId(null); }}>{editMode && <span>＋</span>}</div>)}
         {offGrid.map(t => <button key={t.id} className="dining-table offgrid" onClick={() => setSelectedId(t.id)}>{t.label}</button>)}
-      </div>
+      </div></div>
       <div className="mobile-table-list">{zoneTables.map(t => <button key={t.id} className={`mobile-table ${tableState(t)}`} onClick={() => { setSelectedId(t.id); setDraft(null); }}>
         <strong>{t.label}</strong><span>{STATE_LABEL[tableState(t)]}</span>{t.activeOrder && <small>{euro(Number(t.activeOrder.grossTotal) - Number(t.activeOrder.paidTotal))}</small>}
       </button>)}</div>

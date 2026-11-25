@@ -69,3 +69,5 @@
 .measure-note,.measure-info{font-size:11px;color:#77847b}.measure-warning{font-size:11px;color:#b46b4b;background:#fff4ed;padding:6px 8px;border-left:3px solid #b46b4b}
 
 .side-picker{border:1px solid #dfe5df;border-radius:8px;display:flex;flex-wrap:wrap;gap:8px;padding:8px}.side-picker legend{font-size:11px;color:#77847b;padding:0 4px}.side-picker label{display:flex;align-items:center;gap:4px;font-size:11px}
+
+.floor-scroll{overflow:auto;max-height:70vh}.zoom-label{font-size:11px;color:#758078;min-width:38px;text-align:center}.legend b{font-variant-numeric:tabular-nums;margin-left:4px}
