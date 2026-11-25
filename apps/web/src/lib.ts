@@ -6,7 +6,7 @@ export const DEMO = import.meta.env.VITE_DEMO_MODE === 'true';
 
 export type DiningTable = {
   id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar'; posX: number; posY: number;
-  diameterCm?: number | null; seatsRecommended?: number | null; seatsWarning?: boolean;
+  diameterCm?: number | null; widthCm?: number | null; heightCm?: number | null; seatsRecommended?: number | null; seatsWarning?: boolean;
   activeOrder: null | { id: string; orderNumber: number; status: 'open' | 'sent'; openedAt: string; grossTotal: number; paidTotal: number; lineCount: number };
 };
 export type OrderDetail = {

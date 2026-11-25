@@ -13,7 +13,10 @@ export function tableState(t: DiningTable): TableState {
 }
 const minutesSince = (iso: string) => Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
 const ROUND: [number, number][] = [[70, 3], [90, 4], [120, 8], [150, 10]];
-const roundRecommended = (d: number) => ROUND.reduce((best, item) => Math.abs(item[0] - d) < Math.abs(best[0] - d) ? item : best)[1];
+const SQUARE: [number, number][] = [[70, 2], [80, 4], [90, 4], [100, 6], [120, 8]];
+const closest = (table: [number, number][], value: number) => table.reduce((best, item) => Math.abs(item[0] - value) < Math.abs(best[0] - value) ? item : best)[1];
+const roundRecommended = (d: number) => closest(ROUND, d);
+const squareRecommended = (s: number) => closest(SQUARE, s);
 
 /** Plano de sala: cada mesa muestra en tiempo real el estado de su comanda. */
 export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenInPos: (table: { id: string; label: string }) => void }) {
@@ -30,9 +33,13 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
   const currentZone = zones.includes(zone) ? zone : zones[0];
   const zoneTables = tables.filter(t => t.zone === currentZone);
   const selected = tables.find(t => t.id === selectedId) || null;
-  const [draftSeats, setDraftSeats] = useState(4), [draftDiameter, setDraftDiameter] = useState(90);
-  const [editSeats, setEditSeats] = useState(4), [editDiameter, setEditDiameter] = useState(90);
-  useEffect(() => { setEditSeats(selected?.seats ?? 4); setEditDiameter(Number(selected?.diameterCm) || 90); }, [selected?.id]);
+  const [draftSeats, setDraftSeats] = useState(4), [draftDiameter, setDraftDiameter] = useState(90), [draftSide, setDraftSide] = useState(80);
+  const [editSeats, setEditSeats] = useState(4), [editDiameter, setEditDiameter] = useState(90), [editSide, setEditSide] = useState(80);
+  useEffect(() => {
+    setEditSeats(selected?.seats ?? 4);
+    setEditDiameter(Number(selected?.diameterCm) || 90);
+    setEditSide(Number(selected?.widthCm) || 80);
+  }, [selected?.id]);
   const busy = tables.filter(t => t.activeOrder), openAmount = busy.reduce((s, t) => s + Number(t.activeOrder!.grossTotal) - Number(t.activeOrder!.paidTotal), 0);
 
   useEffect(() => {
@@ -54,14 +61,22 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
   async function createTable(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); const f = new FormData(e.currentTarget); const shape = String(f.get('shape'));
     try {
-      const created = await request<DiningTable>('/tables', { method: 'POST', body: JSON.stringify({ label: String(f.get('label')), seats: Number(f.get('seats')), shape, diameterCm: shape === 'round' ? Number(f.get('diameterCm')) : undefined, zone: String(f.get('zone') || currentZone), posX: draft?.posX ?? 0, posY: draft?.posY ?? 0 }) });
+      const created = await request<DiningTable>('/tables', { method: 'POST', body: JSON.stringify({
+        label: String(f.get('label')), seats: Number(f.get('seats')), shape,
+        diameterCm: shape === 'round' ? Number(f.get('diameterCm')) : undefined,
+        widthCm: shape === 'square' ? Number(f.get('widthCm')) : undefined,
+        zone: String(f.get('zone') || currentZone), posX: draft?.posX ?? 0, posY: draft?.posY ?? 0 }) });
       setDraft(null); await load(); setZone(created.zone); setSelectedId(created.id); setNotice(`${created.label} añadida al plano.`);
     } catch (err) { setError((err as Error).message); }
   }
   async function saveTable(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); if (!selected) return; const f = new FormData(e.currentTarget);
     const shape = String(f.get('shape'));
-    try { await request(`/tables/${selected.id}`, { method: 'PATCH', body: JSON.stringify({ label: String(f.get('label')), seats: Number(f.get('seats')), shape, diameterCm: shape === 'round' ? Number(f.get('diameterCm')) : undefined, zone: String(f.get('zone')) }) }); await load(); setZone(String(f.get('zone'))); setNotice('Mesa actualizada.'); }
+    try { await request(`/tables/${selected.id}`, { method: 'PATCH', body: JSON.stringify({
+      label: String(f.get('label')), seats: Number(f.get('seats')), shape,
+      diameterCm: shape === 'round' ? Number(f.get('diameterCm')) : undefined,
+      widthCm: shape === 'square' ? Number(f.get('widthCm')) : undefined,
+      zone: String(f.get('zone')) }) }); await load(); setZone(String(f.get('zone'))); setNotice('Mesa actualizada.'); }
     catch (err) { setError((err as Error).message); }
   }
   async function removeTable() {
@@ -113,8 +128,10 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
           <label>Forma<select name="shape" defaultValue="square"><option value="square">Cuadrada</option><option value="round">Redonda</option><option value="bar">Barra / taburete</option></select></label>
           <label>Diámetro redonda (cm)<input name="diameterCm" type="number" min="50" max="200" step="0.5" list="round-diameters" value={draftDiameter} onChange={e => { const v = Number(e.target.value); setDraftDiameter(v); setDraftSeats(roundRecommended(v)); }} /></label>
           <datalist id="round-diameters">{ROUND.map(([d, seats]) => <option key={d} value={d}>{seats} plazas recomendadas</option>)}</datalist>
+          <label>Lado cuadrada (cm)<input name="widthCm" type="number" min="50" max="150" step="1" list="square-sides" value={draftSide} onChange={e => { const v = Number(e.target.value); setDraftSide(v); setDraftSeats(squareRecommended(v)); }} /></label>
+          <datalist id="square-sides">{SQUARE.map(([side, seats]) => <option key={side} value={side}>{seats} plazas recomendadas</option>)}</datalist>
           <label>Plazas<input name="seats" type="number" min="1" max="20" step="1" value={draftSeats} onChange={e => setDraftSeats(Number(e.target.value))} required /></label>
-          <small className="measure-note">Catálogo: 70→3, 90→4, 120→8, 150→10. Medidas libres 50-200 cm; cambia las plazas si lo necesitas.</small>
+          <small className="measure-note">Redonda: 70→3, 90→4, 120→8, 150→10 (50-200 cm). Cuadrada: 70→2, 80→4, 90→4, 100→6, 120→8 (50-150 cm). Puedes cambiar las plazas.</small>
           <div className="modal-actions"><button type="button" className="secondary" onClick={() => setDraft(null)}>Cancelar</button><button className="primary">Añadir mesa</button></div>
         </form>
         : !selected ? <div className="empty">{editMode ? <>Arrastra una mesa para moverla, o toca una casilla vacía para crear una nueva.<br /><br /><button className="secondary" onClick={() => setDraft(nextFreeCell())}>＋ Añadir mesa</button></> : 'Selecciona una mesa del plano.'}</div>
@@ -126,8 +143,10 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
           <label>Forma<select name="shape" defaultValue={selected.shape}><option value="square">Cuadrada</option><option value="round">Redonda</option><option value="bar">Barra / taburete</option></select></label>
           <label>Diámetro redonda (cm)<input name="diameterCm" type="number" min="50" max="200" step="0.5" list="round-diameters-edit" value={editDiameter} onChange={e => { const v = Number(e.target.value); setEditDiameter(v); setEditSeats(roundRecommended(v)); }} /></label>
           <datalist id="round-diameters-edit">{ROUND.map(([d, seats]) => <option key={d} value={d}>{seats} plazas recomendadas</option>)}</datalist>
+          <label>Lado cuadrada (cm)<input name="widthCm" type="number" min="50" max="150" step="1" list="square-sides-edit" value={editSide} onChange={e => { const v = Number(e.target.value); setEditSide(v); setEditSeats(squareRecommended(v)); }} /></label>
+          <datalist id="square-sides-edit">{SQUARE.map(([side, seats]) => <option key={side} value={side}>{seats} plazas recomendadas</option>)}</datalist>
           <label>Plazas<input name="seats" type="number" min="1" max="20" step="1" value={editSeats} onChange={e => setEditSeats(Number(e.target.value))} required /></label>
-          <small className="measure-note">Recomendación actual: {roundRecommended(editDiameter)} plazas. Cambiarla es permitido; se avisará si te desvías más de 1.</small>
+          <small className="measure-note">Recomendación: redonda {roundRecommended(editDiameter)}, cuadrada {squareRecommended(editSide)} plazas. Cambiarla es permitido; se avisará si te desvías.</small>
           <div className="modal-actions"><button type="button" className="remove-button" onClick={() => void removeTable()}>Eliminar mesa</button><button className="primary">Guardar</button></div>
         </form>
         : <div className="table-detail">
@@ -135,7 +154,8 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
           <h3>{selected.label}</h3>
           <span className={`state-pill ${tableState(selected)}`}>{STATE_LABEL[tableState(selected)]}</span>
           {selected.diameterCm != null && <p className="measure-info">Ø {Number(selected.diameterCm).toFixed(1)} cm · {selected.seatsRecommended} plazas recomendadas</p>}
-          {selected.seatsWarning && <p className="measure-warning">Capacidad personalizada: se desvía más de 1 plaza de la recomendación para ese diámetro.</p>}
+          {selected.shape === 'square' && selected.widthCm != null && <p className="measure-info">{Number(selected.widthCm)} × {Number(selected.heightCm)} cm · {selected.seatsRecommended} plazas recomendadas</p>}
+          {selected.seatsWarning && <p className="measure-warning">Capacidad personalizada: se desvía de la recomendación para esas medidas.</p>}
           {!selected.activeOrder ? <>
             <p className="modal-description">Mesa libre. Abre una comanda y añade los productos desde la carta.</p>
             <button className="primary wide" onClick={() => onOpenInPos({ id: selected.id, label: selected.label })}>Abrir comanda <span>→</span></button>
