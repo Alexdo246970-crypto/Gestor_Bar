@@ -1,4 +1,4 @@
-export type Role = 'admin' | 'manager' | 'waiter' | 'cashier';
+export type Role = 'admin' | 'manager' | 'waiter' | 'cashier' | 'kitchen';
 export type OrderStatus = 'open' | 'sent' | 'paid' | 'cancelled';
 export interface Product { id: string; name: string; categoryId: string | null; priceNet: number; vatRate: number; active: boolean }
 export interface OrderLineInput { productId: string; quantity: number }

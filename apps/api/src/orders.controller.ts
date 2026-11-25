@@ -122,7 +122,11 @@ export class OrdersController {
         SELECT m.ingredient_id,sum(m.quantity_per_unit*l.quantity) quantity
         FROM order_lines l JOIN order_line_modifications m ON m.tenant_id=l.tenant_id AND m.order_line_id=l.id AND m.action='add'
         WHERE l.tenant_id=$1 AND l.order_id=$2 GROUP BY m.ingredient_id
-      ), totals AS (SELECT ingredient_id,sum(quantity) quantity FROM (SELECT * FROM base UNION ALL SELECT * FROM additions) stock
+      ), resale AS (
+        SELECT p.stock_item_id ingredient_id,sum(l.quantity) quantity
+        FROM order_lines l JOIN products p ON p.tenant_id=l.tenant_id AND p.id=l.product_id
+        WHERE l.tenant_id=$1 AND l.order_id=$2 AND p.stock_item_id IS NOT NULL GROUP BY p.stock_item_id
+      ), totals AS (SELECT ingredient_id,sum(quantity) quantity FROM (SELECT * FROM base UNION ALL SELECT * FROM additions UNION ALL SELECT * FROM resale) stock
         WHERE quantity>0 GROUP BY ingredient_id)
       SELECT totals.ingredient_id,totals.quantity,ingredients.current_unit_cost unit_cost FROM totals JOIN ingredients
         ON ingredients.tenant_id=$1 AND ingredients.id=totals.ingredient_id`,[tenant,id]);

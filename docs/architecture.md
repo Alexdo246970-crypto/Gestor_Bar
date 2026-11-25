@@ -55,17 +55,27 @@ La interfaz de comanda inicial está en modo MVP: agrupa localmente la selecció
 
 `dining_tables` guarda cada mesa con su zona (Salón, Terraza, Barra…), plazas, forma y posición en una cuadrícula del plano. `orders.table_id` vincula la comanda con su mesa y un índice único parcial garantiza una sola comanda activa (`open`/`sent`) por mesa: al abrir una comanda sobre una mesa ocupada, la API devuelve la existente y las nuevas líneas se suman a ella. El mapa muestra cada mesa como libre, comanda sin enviar, en cocina o con cobro parcial. Los pagos aceptan dos formas: tarjeta (datáfono TPV) y efectivo, guardando efectivo entregado y cambio; se pueden dividir en varios pagos. Al completar el total la comanda pasa a `paid` y la mesa queda libre.
 
+## Perfil de cocina
+
+El rol `kitchen` entra directamente en la vista de cocina. La navegación se construye a partir de los permisos del rol: cocina solo ve «Cocina» y no puede abrir mapa de mesas, TPV, pedidos, carta, equipo, inventario ni finanzas. La API aplica la misma política y devuelve `403` en esos endpoints.
+
+`GET /kitchen/orders` devuelve únicamente comandas enviadas con platos pendientes: número, mesa o canal, hora, líneas, cantidades, modificaciones y estado de cocina. No incluye precios, costes, márgenes, pagos ni datos de cliente. `PATCH /kitchen/lines/:id/status` permite pasar cada plato por `received`, `preparing` y `ready`.
+
+Desde «Equipo», `admin` y `manager` crean usuarios internos con rol `kitchen` o `waiter` y contraseña temporal, los desactivan y revocan sus sesiones. Desactivar una pertenencia impide el login (`tenant_users.active`) y elimina las sesiones abiertas del usuario en ese local.
+
+La configuración de impresora se guarda en `tenant_kitchen_settings`. Cocina puede cambiar nombre, modo y autoprint; host y puerto quedan reservados a `admin`/`manager`. Cada cambio se registra en `kitchen_settings_audit` con valores anteriores, nuevos, autor y fecha.
+
 ## Finanzas
 
 `GET /reports/daily` consulta pedidos pagados por fecha de cierre local, pagos por fecha local, facturas de proveedores recibidas y gastos operativos. Devuelve coste neto y bruto por proveedor, IVA de compra marcado como deducible, IVA deducible de gastos, IVA repercutido, estimación de liquidación, consumo de ingredientes, margen bruto, resultado operativo y ejecución de presupuestos. Cada ingrediente guarda formato (por ejemplo, pack de seis briks), cantidad base por paquete y precio neto por paquete. La recepción convierte paquetes a cantidades de inventario y actualiza el coste medio ponderado; los movimientos de venta guardan el coste aplicado. La fecha de negocio respeta `tenants.timezone`. Las líneas conservan precio e IVA históricos aunque cambie el catálogo. La liquidación de IVA es orientativa y debe verificarse con facturas y normativa.
 
 ## Esquema SQL
 
-Las migraciones ejecutables `database/migrations/001_initial.sql` y `002_inventory_packages_and_vat.sql` crean locales, usuarios y membresías, categorías, carta, ingredientes con formato/precio de compra, recetas y extras compatibles, proveedores, facturas de compra y líneas, menús diarios, pedidos y detalle, pagos, movimientos de stock, cierres de caja, gastos operativos, presupuestos, sesiones, índices y políticas RLS. El runner registra versiones y aplica la segunda migración de forma incremental a instalaciones previas.
+Las migraciones ejecutables de `database/migrations/` crean locales, usuarios y membresías, categorías, carta, ingredientes con formato/precio de compra, recetas y extras compatibles, proveedores, facturas de compra y líneas, menús diarios, pedidos y detalle, pagos, movimientos de stock, cierres de caja, gastos operativos, presupuestos, sesiones, ajustes de cocina y su auditoría, índices y políticas RLS. El runner registra cada versión y aplica solo las pendientes.
 
 ## Endpoints
 
-Cookie de sesión requerida en todos salvo el bootstrap y login. Roles: `admin` y `manager` para catálogo/inventario; `waiter` para comandas; `cashier` para cobro y caja. `admin` puede operar todas las áreas.
+Cookie de sesión requerida en todos salvo el bootstrap y login. Roles: `admin` y `manager` para catálogo/inventario; `waiter` para comandas; `cashier` para cobro y caja; `kitchen` solo para comandas de cocina y ajustes de impresora. `admin` puede operar todas las áreas.
 
 | Verbo | Endpoint | Función / acceso |
 |---|---|---|
@@ -73,6 +83,12 @@ Cookie de sesión requerida en todos salvo el bootstrap y login. Roles: `admin` 
 | POST | `/api/auth/login` | Identificación por slug, email y contraseña |
 | GET | `/api/auth/me` | Perfil de la sesión actual |
 | POST | `/api/auth/logout` | Destruir sesión |
+| GET / POST | `/api/staff` | Listar equipo / crear usuario `kitchen` o `waiter` con contraseña temporal (admin, manager) |
+| PATCH | `/api/staff/:userId` | Activar o desactivar la pertenencia; al desactivar revoca sesiones (admin, manager) |
+| POST | `/api/staff/:userId/revoke-sessions` | Cerrar todas las sesiones del usuario en el local (admin, manager) |
+| GET | `/api/kitchen/orders` | Comandas enviadas con platos pendientes, sin precios ni datos de cliente |
+| PATCH | `/api/kitchen/lines/:id/status` | Cambiar el estado de cocina de una línea (`received`, `preparing`, `ready`) |
+| GET / PATCH | `/api/kitchen/settings` | Leer/actualizar impresora; host y puerto solo admin/manager; cada cambio queda auditado |
 | GET | `/api/menu` | Carta activa |
 | POST / PATCH | `/api/products`, `/api/products/:id` | Crear, actualizar o desactivar producto |
 | POST | `/api/categories` | Crear categoría |

@@ -114,6 +114,7 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
         : <div className="table-detail">
           <p className="eyebrow">{selected.zone.toUpperCase()} · {selected.seats} PLAZAS</p>
           <h3>{selected.label}</h3>
+          {canEdit&&selected.qrToken&&<button className="secondary wide-secondary" onClick={()=>{const url=`${window.location.origin}/?qr=${encodeURIComponent(selected.qrToken!)}`;void navigator.clipboard.writeText(url).then(()=>setNotice(`Enlace QR de ${selected.label} copiado.`)).catch(()=>setError(`Enlace QR: ${url}`))}}>Copiar enlace de pedido QR</button>}
           <span className={`state-pill ${tableState(selected)}`}>{STATE_LABEL[tableState(selected)]}</span>
           {!selected.activeOrder ? <>
             <p className="modal-description">Mesa libre. Abre una comanda y añade los productos desde la carta.</p>
