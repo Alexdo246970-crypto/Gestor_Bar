@@ -10,6 +10,7 @@ import { CatalogController } from './catalog.controller';
 import { TablesController } from './tables.controller';
 import { RoomsController } from './rooms.controller';
 import { LedgerController } from './ledger.controller';
+import { SalariesController } from './salaries.controller';
 import { PurchasesController, SuppliersController } from './purchases.controller';
 
 @Module({ controllers: [AuthController, CoreController, CatalogController, OrdersController, InventoryController, PurchasesController, SuppliersController, FinanceController, TablesController, LedgerController, RoomsController],
