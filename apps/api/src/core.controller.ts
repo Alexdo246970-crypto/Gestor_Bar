@@ -102,9 +102,10 @@ export class CoreController {
     if (!b?.name || !Number.isFinite(b.priceNet) || !Number.isFinite(b.vatRate)) throw new BadRequestException('Nombre, precio neto e IVA son obligatorios');
     return this.db.tenant(req, async c => {
       const station=b.kitchenStation||'kitchen';if(!['kitchen','bar'].includes(station))throw new BadRequestException('Partida de cocina no válida');
-      const result = await c.query(`INSERT INTO products(tenant_id,category_id,name,description,price_net,vat_rate,kitchen_station)
-        VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,name,category_id "categoryId",price_net "priceNet",vat_rate "vatRate",kitchen_station "kitchenStation"`,
-        [req.session.app!.tenantId,b.categoryId||null,b.name,b.description||null,b.priceNet,b.vatRate,station]); return result.rows[0];
+      if(b.stockItemId){const item=await c.query('SELECT id FROM ingredients WHERE tenant_id=$1 AND id=$2 AND active',[req.session.app!.tenantId,b.stockItemId]);if(!item.rowCount)throw new BadRequestException('Artículo de stock no disponible');}
+      const result = await c.query(`INSERT INTO products(tenant_id,category_id,name,description,price_net,vat_rate,kitchen_station,stock_item_id)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,name,category_id "categoryId",price_net "priceNet",vat_rate "vatRate",kitchen_station "kitchenStation",stock_item_id "stockItemId"`,
+        [req.session.app!.tenantId,b.categoryId||null,b.name,b.description||null,b.priceNet,b.vatRate,station,b.stockItemId||null]); return result.rows[0];
     });
   }
 }
