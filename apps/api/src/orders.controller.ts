@@ -166,6 +166,12 @@ export class OrdersController {
       await c.query(`INSERT INTO stock_movements(tenant_id,ingredient_id,movement_type,quantity_delta,unit_cost,source_type,source_id,created_by)
         VALUES($1,$2,'sale',-$3,$4,'order',$5,$6)`,[tenant,row.ingredient_id,row.quantity,row.unit_cost,id,user]);
     }
+    const pay=await c.query('SELECT method FROM payments WHERE tenant_id=$1 AND order_id=$2 ORDER BY created_at DESC LIMIT 1',[tenant,id]);
+    const account=pay.rows[0]?.method==='card'?'bank':'cash';
+    await c.query(`INSERT INTO ledger_entries(tenant_id,entry_date,entry_type,category,account,amount_net,vat,total,source_type,source_id,reference,created_by)
+      VALUES($1,CURRENT_DATE,'income','ventas',$2,$3,$4,$5,'order',$6,$7,$8)
+      ON CONFLICT (tenant_id,source_type,source_id) DO NOTHING`,
+      [tenant,account,ord.rows[0].net_total,ord.rows[0].vat_total,ord.rows[0].gross_total,id,`#${ord.rows[0].order_number}`,user]);
     await c.query("UPDATE orders SET status='paid',closed_at=now(),stock_deducted_at=now() WHERE tenant_id=$1 AND id=$2",[tenant,id]);
   }
 }

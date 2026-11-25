@@ -2,54 +2,278 @@ import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post,
 import { ApiTags } from '@nestjs/swagger';
 import { DbService, AuthRequest } from './db.service';
 
+type PurchaseLineBody = { ingredientId?: string; description?: string; quantity?: number; packages?: number; packagePriceNet?: number; unitPriceNet?: number; vatRate?: number };
+type PurchaseBody = {
+  supplierId?: string; invoiceNumber?: string; purchasedAt?: string; invoiceDate?: string; dueDate?: string;
+  paymentMethod?: string; vatDeductible?: boolean; notes?: string; lines?: PurchaseLineBody[];
+};
+type PaymentBody = { amount: number; method?: string; account?: 'cash' | 'bank'; reference?: string };
+type ReceiveBody = { lines?: { lineId: string; quantity: number; note?: string }[] };
+
+const round = (n: number) => Math.round(n * 100) / 100;
+const num = (v: unknown, fallback = 0) => v === undefined || v === null || v === '' ? fallback : Number(v);
+
 @ApiTags('purchases')
 @Controller('purchases')
 export class PurchasesController {
-  constructor(private readonly db:DbService){}
-  private manager(req:AuthRequest){const s=req.session?.app;if(!s)throw new UnauthorizedException();if(!['admin','manager'].includes(s.role))throw new ForbiddenException();return s;}
-  @Get() async list(@Req() req:AuthRequest){const s=this.manager(req);return this.db.tenant(req,async c=>(await c.query(`SELECT p.id,p.supplier_id "supplierId",sp.name "supplierName",p.invoice_number "invoiceNumber",p.purchased_at "purchasedAt",p.status,p.net_total "netTotal",p.vat_total "vatTotal",p.gross_total "grossTotal",p.received_gross_total "receivedGrossTotal",count(pl.id)::int "lineCount" FROM purchases p LEFT JOIN suppliers sp ON sp.tenant_id=p.tenant_id AND sp.id=p.supplier_id LEFT JOIN purchase_lines pl ON pl.tenant_id=p.tenant_id AND pl.purchase_id=p.id WHERE p.tenant_id=$1 GROUP BY p.id,sp.name ORDER BY p.purchased_at DESC,p.id DESC LIMIT 100`,[s.tenantId])).rows);}
-  @Get('last-price/:ingredientId') async lastPrice(@Req() req:AuthRequest,@Param('ingredientId') ingredientId:string){const s=this.manager(req);return this.db.tenant(req,async c=>{const row=(await c.query(`SELECT p.supplier_id "supplierId",(pl.unit_price_net*i.package_size) "packagePriceNet",pl.vat_rate "vatRate",p.purchased_at "purchasedAt" FROM purchase_lines pl JOIN purchases p ON p.tenant_id=pl.tenant_id AND p.id=pl.purchase_id JOIN ingredients i ON i.tenant_id=pl.tenant_id AND i.id=pl.ingredient_id WHERE pl.tenant_id=$1 AND pl.ingredient_id=$2 AND p.status='received' ORDER BY p.purchased_at DESC LIMIT 1`,[s.tenantId,ingredientId])).rows[0];return row||null;});}
-  @Get(':id') async get(@Req() req:AuthRequest,@Param('id') id:string){const s=this.manager(req);return this.db.tenant(req,async c=>{const purchase=(await c.query(`SELECT p.id,p.supplier_id "supplierId",sp.name "supplierName",p.invoice_number "invoiceNumber",p.purchased_at "purchasedAt",p.status,p.net_total "netTotal",p.vat_total "vatTotal",p.gross_total "grossTotal",p.received_gross_total "receivedGrossTotal" FROM purchases p LEFT JOIN suppliers sp ON sp.tenant_id=p.tenant_id AND sp.id=p.supplier_id WHERE p.tenant_id=$1 AND p.id=$2`,[s.tenantId,id])).rows[0];if(!purchase)throw new BadRequestException('Pedido no encontrado');purchase.lines=(await c.query(`SELECT pl.id,pl.ingredient_id "ingredientId",i.name "ingredientName",pl.quantity,pl.received_quantity "receivedQuantity",pl.receipt_note "receiptNote",pl.package_count "packages",pl.unit_price_net "unitPriceNet",pl.vat_rate "vatRate",pl.line_net "lineNet",pl.line_vat "lineVat",pl.line_gross "lineGross" FROM purchase_lines pl JOIN ingredients i ON i.tenant_id=pl.tenant_id AND i.id=pl.ingredient_id WHERE pl.tenant_id=$1 AND pl.purchase_id=$2 ORDER BY i.name`,[s.tenantId,id])).rows;return purchase;});}
-  @Post() async create(@Req() req:AuthRequest,@Body() b:{supplierId?:string;invoiceNumber?:string;purchasedAt?:string;paymentMethod?:string;vatDeductible?:boolean;lines:{ingredientId:string;quantity?:number;packages?:number;unitPriceNet?:number;packagePriceNet?:number;vatRate?:number}[]}){
-    const s=this.manager(req);if(!Array.isArray(b?.lines)||!b.lines.length)throw new BadRequestException('Añade al menos una línea de compra');if(new Set(b.lines.map(line=>line.ingredientId)).size!==b.lines.length)throw new BadRequestException('No repitas artículos en el mismo pedido');
-    return this.db.tenant(req,async c=>{if(b.supplierId){const supplier=await c.query('SELECT 1 FROM suppliers WHERE tenant_id=$1 AND id=$2 AND active',[s.tenantId,b.supplierId]);if(!supplier.rowCount)throw new BadRequestException('Proveedor no disponible');}const p=await c.query("INSERT INTO purchases(tenant_id,supplier_id,invoice_number,purchased_at,status,payment_method,vat_deductible) VALUES($1,$2,$3,$4,'draft',$5,$6) RETURNING id",[s.tenantId,b.supplierId||null,b.invoiceNumber||null,b.purchasedAt||new Date().toISOString(),b.paymentMethod||null,b.vatDeductible!==false]);let net=0,vat=0;
-      for(const l of b.lines){const ingredient=await c.query('SELECT package_size,package_price_net,default_vat_rate,supplier_id FROM ingredients WHERE tenant_id=$1 AND id=$2 AND active',[s.tenantId,l.ingredientId]);if(!ingredient.rows[0])throw new BadRequestException('Ingrediente no disponible');const cfg=ingredient.rows[0];if(String(cfg.supplier_id||'')!==String(b.supplierId||'')){const available=await c.query('SELECT 1 FROM supplier_item_prices WHERE tenant_id=$1 AND ingredient_id=$2 AND supplier_id=$3 LIMIT 1',[s.tenantId,l.ingredientId,b.supplierId||null]);if(!available.rowCount)throw new BadRequestException('El proveedor no tiene tarifa asignada para este artículo');}const packageCount=l.packages,quantity=packageCount!=null?Number(packageCount)*Number(cfg.package_size):Number(l.quantity),unitPriceNet=packageCount!=null?Number(l.packagePriceNet??cfg.package_price_net)/Number(cfg.package_size):Number(l.unitPriceNet),vatRate=l.vatRate??Number(cfg.default_vat_rate);if(!Number.isFinite(quantity)||quantity<=0||!Number.isFinite(unitPriceNet)||unitPriceNet<0||!Number.isFinite(vatRate)||vatRate<0)throw new BadRequestException('Línea de compra no válida');const n=Number((quantity*unitPriceNet).toFixed(2)),v=Number((n*vatRate/100).toFixed(2));net+=n;vat+=v;await c.query('INSERT INTO purchase_lines(tenant_id,purchase_id,ingredient_id,quantity,package_count,unit_price_net,vat_rate,line_net,line_vat,line_gross) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[s.tenantId,p.rows[0].id,l.ingredientId,quantity,packageCount??null,unitPriceNet,vatRate,n,v,n+v]);}
-      await c.query('UPDATE purchases SET net_total=$3,vat_total=$4,gross_total=$3+$4 WHERE tenant_id=$1 AND id=$2',[s.tenantId,p.rows[0].id,net,vat]);return{id:p.rows[0].id,status:'draft',netTotal:net,vatTotal:vat,grossTotal:net+vat};});
+  constructor(private readonly db: DbService) {}
+
+  private session(req: AuthRequest, write = false) {
+    const s = req.session?.app;
+    if (!s) throw new UnauthorizedException();
+    if (!['admin', 'manager', 'cashier'].includes(s.role)) throw new ForbiddenException('Permiso insuficiente');
+    if (write && !['admin', 'manager'].includes(s.role)) throw new ForbiddenException('Permiso insuficiente');
+    return s;
   }
-  @Patch(':id') async updateDraft(@Req() req:AuthRequest,@Param('id') id:string,@Body() b:{supplierId?:string;lines:{ingredientId:string;packages?:number;quantity?:number;packagePriceNet?:number;unitPriceNet?:number;vatRate?:number}[]}){const s=this.manager(req);if(!Array.isArray(b?.lines)||!b.lines.length)throw new BadRequestException('Añade al menos una línea de compra');if(new Set(b.lines.map(line=>line.ingredientId)).size!==b.lines.length)throw new BadRequestException('No repitas artículos en el mismo pedido');return this.db.tenant(req,async c=>{const p=await c.query("SELECT status,supplier_id FROM purchases WHERE tenant_id=$1 AND id=$2 FOR UPDATE",[s.tenantId,id]);if(!p.rows[0]||p.rows[0].status!=='draft')throw new BadRequestException('Solo se pueden editar pedidos en borrador');const supplierId=b.supplierId===undefined?p.rows[0].supplier_id:b.supplierId||null;if(supplierId){const supplier=await c.query('SELECT 1 FROM suppliers WHERE tenant_id=$1 AND id=$2 AND active',[s.tenantId,supplierId]);if(!supplier.rowCount)throw new BadRequestException('Proveedor no disponible');}let net=0,vat=0;const prepared=[];for(const l of b.lines){const row=(await c.query('SELECT package_size,package_price_net,default_vat_rate,supplier_id FROM ingredients WHERE tenant_id=$1 AND id=$2 AND active',[s.tenantId,l.ingredientId])).rows[0];if(!row)throw new BadRequestException('Ingrediente no disponible');if(String(row.supplier_id||'')!==String(supplierId||''))throw new BadRequestException('La compra solo puede contener productos del proveedor asignado');const packages=l.packages==null?null:Number(l.packages),quantity=packages==null?Number(l.quantity):packages*Number(row.package_size),unit=packages==null?Number(l.unitPriceNet):Number(l.packagePriceNet??row.package_price_net)/Number(row.package_size),rate=Number(l.vatRate??row.default_vat_rate);if(!Number.isFinite(quantity)||quantity<=0||!Number.isFinite(unit)||unit<0||!Number.isFinite(rate)||rate<0)throw new BadRequestException('Línea de compra no válida');const lineNet=Number((quantity*unit).toFixed(2)),lineVat=Number((lineNet*rate/100).toFixed(2));net+=lineNet;vat+=lineVat;prepared.push({l,packages,quantity,unit,rate,lineNet,lineVat});}await c.query('DELETE FROM purchase_lines WHERE tenant_id=$1 AND purchase_id=$2',[s.tenantId,id]);for(const x of prepared)await c.query('INSERT INTO purchase_lines(tenant_id,purchase_id,ingredient_id,quantity,package_count,unit_price_net,vat_rate,line_net,line_vat,line_gross) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[s.tenantId,id,x.l.ingredientId,x.quantity,x.packages,x.unit,x.rate,x.lineNet,x.lineVat,x.lineNet+x.lineVat]);await c.query('UPDATE purchases SET supplier_id=$3,net_total=$4,vat_total=$5,gross_total=$4+$5 WHERE tenant_id=$1 AND id=$2',[s.tenantId,id,supplierId,net,vat]);return{id,status:'draft',netTotal:net,vatTotal:vat,grossTotal:net+vat};});}
-  @Post(':id/duplicate') async duplicate(@Req() req:AuthRequest,@Param('id') id:string){const s=this.manager(req);return this.db.tenant(req,async c=>{const source=(await c.query('SELECT supplier_id FROM purchases WHERE tenant_id=$1 AND id=$2',[s.tenantId,id])).rows[0];if(!source)throw new BadRequestException('Pedido no encontrado');const lines=(await c.query('SELECT ingredient_id,package_count,quantity,unit_price_net,vat_rate FROM purchase_lines WHERE tenant_id=$1 AND purchase_id=$2',[s.tenantId,id])).rows;if(!lines.length)throw new BadRequestException('El pedido no tiene líneas');const created=(await c.query("INSERT INTO purchases(tenant_id,supplier_id,purchased_at,status,vat_deductible) VALUES($1,$2,now(),'draft',true) RETURNING id",[s.tenantId,source.supplier_id])).rows[0];let net=0,vat=0;for(const l of lines){const n=Number((Number(l.quantity)*Number(l.unit_price_net)).toFixed(2)),v=Number((n*Number(l.vat_rate)/100).toFixed(2));net+=n;vat+=v;await c.query('INSERT INTO purchase_lines(tenant_id,purchase_id,ingredient_id,quantity,package_count,unit_price_net,vat_rate,line_net,line_vat,line_gross) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[s.tenantId,created.id,l.ingredient_id,l.quantity,l.package_count,l.unit_price_net,l.vat_rate,n,v,n+v]);}await c.query('UPDATE purchases SET net_total=$3,vat_total=$4,gross_total=$3+$4 WHERE tenant_id=$1 AND id=$2',[s.tenantId,created.id,net,vat]);return{id:created.id,status:'draft',netTotal:net,vatTotal:vat,grossTotal:net+vat};});}
-  @Post(':id/receive') async receive(@Req() req:AuthRequest,@Param('id') id:string,@Body() b:{lines?:{lineId:string;quantity:number;note?:string}[]}){
-    const s=this.manager(req);
-    return this.db.tenant(req,async c=>{
-      const purchase=(await c.query("SELECT status,supplier_id FROM purchases WHERE tenant_id=$1 AND id=$2 FOR UPDATE",[s.tenantId,id])).rows[0];
-      if(!purchase||!['draft','partially_received'].includes(purchase.status))throw new BadRequestException('Pedido inexistente, cancelado o ya recibido');
-      const lines=(await c.query('SELECT id,ingredient_id,quantity,received_quantity,receipt_note,unit_price_net,vat_rate FROM purchase_lines WHERE tenant_id=$1 AND purchase_id=$2 FOR UPDATE',[s.tenantId,id])).rows;
-      const requested=b?.lines;
-      if(requested!==undefined&&(!Array.isArray(requested)||!requested.length))throw new BadRequestException('Indica al menos una línea que recibir');if(requested&&new Set(requested.map(line=>line.lineId)).size!==requested.length)throw new BadRequestException('No repitas líneas en la recepción');
-      const receivedMap=new Map((requested||[]).map(line=>[line.lineId,{quantity:Number(line.quantity),note:String(line.note||'').trim()}]));
-      let receivedNet=0,receivedVat=0,receivedLines=0;
-      for(const line of lines){
-        const remaining=Number(line.quantity)-Number(line.received_quantity);
-        const entry=receivedMap.get(line.id);const quantity=requested===undefined?remaining:(entry?.quantity??0);
-        if(quantity===0)continue;
-        if(!Number.isFinite(quantity)||quantity<0||quantity>remaining)throw new BadRequestException('La cantidad recibida supera lo pendiente o no es válida');
-        const ingredient=(await c.query('SELECT current_stock,current_unit_cost FROM ingredients WHERE tenant_id=$1 AND id=$2 FOR UPDATE',[s.tenantId,line.ingredient_id])).rows[0];
-        if(!ingredient)throw new BadRequestException('Artículo de inventario no disponible');
-        const cost=Number(line.unit_price_net),stock=Number(ingredient.current_stock),oldCost=Number(ingredient.current_unit_cost),newStock=stock+quantity;
-        await c.query('UPDATE ingredients SET current_unit_cost=CASE WHEN $3>0 THEN ($4*$5+$6*$7)/$3 ELSE $7 END,current_stock=$3 WHERE tenant_id=$1 AND id=$2',[s.tenantId,line.ingredient_id,newStock,stock,oldCost,quantity,cost]);
-        await c.query(`UPDATE purchase_lines SET received_quantity=received_quantity+$3,receipt_note=CASE WHEN $4='' THEN receipt_note ELSE concat_ws(chr(10),nullif(receipt_note,''),$4) END WHERE tenant_id=$1 AND id=$2`,[s.tenantId,line.id,quantity,entry?.note||'']);
-        await c.query("INSERT INTO stock_movements(tenant_id,ingredient_id,movement_type,quantity_delta,unit_cost,source_type,source_id,created_by) VALUES($1,$2,'purchase',$3,$4,'purchase',$5,$6)",[s.tenantId,line.ingredient_id,quantity,cost,id,s.userId]);
-        const net=Number((quantity*cost).toFixed(2)),vat=Number((net*Number(line.vat_rate)/100).toFixed(2));receivedNet+=net;receivedVat+=vat;receivedLines++;
+
+  private async checkSupplier(c: any, tenant: string, supplierId?: string | null) {
+    if (!supplierId) return;
+    const supplier = await c.query('SELECT 1 FROM suppliers WHERE tenant_id=$1 AND id=$2 AND active', [tenant, supplierId]);
+    if (!supplier.rowCount) throw new BadRequestException('Proveedor no disponible');
+  }
+
+  private async lines(c: any, tenant: string, purchaseId: string, lines: PurchaseLineBody[], supplierId?: string | null) {
+    if (!Array.isArray(lines) || !lines.length) throw new BadRequestException('Añade al menos una línea de compra');
+    if (new Set(lines.map(l => l.ingredientId || l.description)).size !== lines.length) throw new BadRequestException('No repitas artículos en el mismo pedido');
+    await c.query('DELETE FROM purchase_lines WHERE tenant_id=$1 AND purchase_id=$2', [tenant, purchaseId]);
+    let net = 0, vat = 0;
+    for (const l of lines) {
+      const description = l.description?.trim() || null;
+      const ingredientId = l.ingredientId?.trim() || null;
+      if (!!ingredientId === !!description) throw new BadRequestException('Cada línea debe indicar un ingrediente o una descripción libre');
+      let quantity = num(l.quantity, 1), unitPriceNet = num(l.unitPriceNet), vatRate = num(l.vatRate, 21), packageCount: number | null = null;
+      if (ingredientId) {
+        const cfg = (await c.query('SELECT package_size,package_price_net,default_vat_rate,supplier_id FROM ingredients WHERE tenant_id=$1 AND id=$2 AND active', [tenant, ingredientId])).rows[0];
+        if (!cfg) throw new BadRequestException('Ingrediente no disponible');
+        if (supplierId && String(cfg.supplier_id || '') !== String(supplierId)) {
+          const available = await c.query('SELECT 1 FROM supplier_item_prices WHERE tenant_id=$1 AND ingredient_id=$2 AND supplier_id=$3 LIMIT 1', [tenant, ingredientId, supplierId]);
+          if (!available.rowCount) throw new BadRequestException('El proveedor no tiene tarifa asignada para este artículo');
+        }
+        packageCount = l.packages === undefined ? null : num(l.packages);
+        quantity = packageCount !== null ? packageCount * Number(cfg.package_size) : num(l.quantity);
+        unitPriceNet = packageCount !== null ? num(l.packagePriceNet ?? cfg.package_price_net) / Number(cfg.package_size) : num(l.unitPriceNet);
+        vatRate = l.vatRate === undefined ? Number(cfg.default_vat_rate) : num(l.vatRate);
       }
-      if(requested)for(const lineId of receivedMap.keys())if(!lines.some(line=>line.id===lineId))throw new BadRequestException('La línea no pertenece a este pedido');
-      if(!receivedLines)throw new BadRequestException('No quedan cantidades pendientes por recibir');
-      const pending=(await c.query('SELECT count(*)::int count FROM purchase_lines WHERE tenant_id=$1 AND purchase_id=$2 AND received_quantity<quantity',[s.tenantId,id])).rows[0].count;
-      const status=Number(pending)===0?'received':'partially_received';
-      await c.query(`UPDATE purchases SET status=$3,received_net_total=received_net_total+$4,received_vat_total=received_vat_total+$5,received_gross_total=received_gross_total+$4+$5 WHERE tenant_id=$1 AND id=$2`,[s.tenantId,id,status,receivedNet,receivedVat]);
-      return{ok:true,status,receivedLines,receivedNet,receivedVat,receivedGross:receivedNet+receivedVat};
+      if (!Number.isFinite(quantity) || quantity <= 0) throw new BadRequestException('Cantidad de línea no válida');
+      if (!Number.isFinite(unitPriceNet) || unitPriceNet < 0) throw new BadRequestException('Precio de línea no válido');
+      if (!Number.isFinite(vatRate) || vatRate < 0) throw new BadRequestException('IVA de línea no válido');
+      const lineNet = round(quantity * unitPriceNet), lineVat = round(lineNet * vatRate / 100);
+      net += lineNet; vat += lineVat;
+      await c.query(`INSERT INTO purchase_lines(tenant_id,purchase_id,ingredient_id,description,quantity,package_count,unit_price_net,vat_rate,line_net,line_vat,line_gross)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [tenant, purchaseId, ingredientId, description, quantity, packageCount, unitPriceNet, vatRate, lineNet, lineVat, round(lineNet + lineVat)]);
+    }
+    await c.query('UPDATE purchases SET net_total=$3,vat_total=$4,gross_total=$3+$4 WHERE tenant_id=$1 AND id=$2', [tenant, purchaseId, round(net), round(vat)]);
+  }
+
+  private async detail(c: any, tenant: string, id: string) {
+    const header = (await c.query(`SELECT p.id,p.supplier_id "supplierId",s.name "supplierName",p.invoice_number "invoiceNumber",
+        p.purchased_at "purchasedAt",p.invoice_date "invoiceDate",p.due_date "dueDate",p.status,
+        p.payment_status "paymentStatus",p.paid_amount "paidAmount",p.payment_method "paymentMethod",
+        p.vat_deductible "vatDeductible",p.net_total "netTotal",p.vat_total "vatTotal",p.gross_total "grossTotal",
+        p.received_gross_total "receivedGrossTotal",p.notes,p.gross_total-p.paid_amount "pendingAmount"
+      FROM purchases p LEFT JOIN suppliers s ON s.tenant_id=p.tenant_id AND s.id=p.supplier_id
+      WHERE p.tenant_id=$1 AND p.id=$2`, [tenant, id])).rows[0];
+    if (!header) throw new BadRequestException('Pedido no encontrado');
+    const lines = (await c.query(`SELECT l.id,l.description,l.ingredient_id "ingredientId",i.name "ingredientName",l.quantity,
+        l.received_quantity "receivedQuantity",l.receipt_note "receiptNote",l.package_count "packageCount",
+        l.unit_price_net "unitPriceNet",l.vat_rate "vatRate",l.line_net "lineNet",l.line_vat "lineVat",l.line_gross "lineGross"
+      FROM purchase_lines l LEFT JOIN ingredients i ON i.tenant_id=l.tenant_id AND i.id=l.ingredient_id
+      WHERE l.tenant_id=$1 AND l.purchase_id=$2 ORDER BY l.description NULLS LAST,i.name NULLS LAST`, [tenant, id])).rows;
+    const payments = (await c.query(`SELECT id,amount,method,account,reference,paid_at "paidAt" FROM purchase_payments
+      WHERE tenant_id=$1 AND purchase_id=$2 ORDER BY paid_at`, [tenant, id])).rows;
+    return { ...header, lines, payments };
+  }
+
+  /** Listado con filtros por fecha de factura, proveedor, estado de recepción o estado de pago. */
+  @Get() async list(@Req() req: AuthRequest, @Query('from') from?: string, @Query('to') to?: string,
+                    @Query('supplierId') supplierId?: string, @Query('status') status?: string) {
+    const s = this.session(req);
+    return this.db.tenant(req, async c => {
+      const filter = status && ['pending', 'partial', 'paid'].includes(status) ? 'p.payment_status' : 'p.status';
+      const rows = (await c.query(`SELECT p.id,p.supplier_id "supplierId",p.invoice_number "invoiceNumber",p.purchased_at "purchasedAt",
+          p.invoice_date "invoiceDate",p.due_date "dueDate",p.status,p.payment_status "paymentStatus",p.paid_amount "paidAmount",
+          p.gross_total "grossTotal",p.received_gross_total "receivedGrossTotal",p.gross_total-p.paid_amount "pendingAmount",
+          p.vat_deductible "vatDeductible",s.name "supplierName",
+          (SELECT count(*)::int FROM purchase_lines l WHERE l.tenant_id=p.tenant_id AND l.purchase_id=p.id) "lineCount"
+        FROM purchases p LEFT JOIN suppliers s ON s.tenant_id=p.tenant_id AND s.id=p.supplier_id
+        WHERE p.tenant_id=$1 AND ($2::date IS NULL OR p.invoice_date >= $2::date)
+          AND ($3::date IS NULL OR p.invoice_date <= $3::date)
+          AND ($4::uuid IS NULL OR p.supplier_id=$4::uuid)
+          AND ($5::text IS NULL OR ${filter}=$5)
+        ORDER BY p.invoice_date DESC,p.id DESC LIMIT 500`,
+        [s.tenantId, from || null, to || null, supplierId || null, status || null])).rows;
+      const totals = rows.reduce((acc: any, r: any) => {
+        acc.gross += Number(r.grossTotal); acc.paid += Number(r.paidAmount); acc.pending += Number(r.pendingAmount);
+        return acc;
+      }, { gross: 0, paid: 0, pending: 0 });
+      return { lines: rows, totals: { gross: round(totals.gross), paid: round(totals.paid), pending: round(totals.pending) } };
     });
   }
-  @Post(':id/cancel') async cancel(@Req() req:AuthRequest,@Param('id') id:string){const s=this.manager(req);return this.db.tenant(req,async c=>{const r=await c.query("UPDATE purchases SET status='void' WHERE tenant_id=$1 AND id=$2 AND status IN ('draft','partially_received') RETURNING id",[s.tenantId,id]);if(!r.rowCount)throw new BadRequestException('Solo se pueden cancelar pedidos pendientes');return{ok:true};});}
+
+  @Get('last-price/:ingredientId') async lastPrice(@Req() req: AuthRequest, @Param('ingredientId') ingredientId: string) {
+    const s = this.session(req);
+    return this.db.tenant(req, async c => {
+      const row = (await c.query(`SELECT p.supplier_id "supplierId",(pl.unit_price_net*i.package_size) "packagePriceNet",pl.vat_rate "vatRate",p.purchased_at "purchasedAt"
+        FROM purchase_lines pl JOIN purchases p ON p.tenant_id=pl.tenant_id AND p.id=pl.purchase_id
+        JOIN ingredients i ON i.tenant_id=pl.tenant_id AND i.id=pl.ingredient_id
+        WHERE pl.tenant_id=$1 AND pl.ingredient_id=$2 AND p.status IN ('received','partially_received')
+        ORDER BY p.purchased_at DESC LIMIT 1`, [s.tenantId, ingredientId])).rows[0];
+      return row || null;
+    });
+  }
+
+  @Get(':id') async get(@Req() req: AuthRequest, @Param('id') id: string) {
+    this.session(req);
+    return this.db.tenant(req, async c => this.detail(c, req.session!.app!.tenantId, id));
+  }
+
+  @Post() async create(@Req() req: AuthRequest, @Body() b: PurchaseBody) {
+    const s = this.session(req, true);
+    const purchasedAt = b.purchasedAt || new Date().toISOString();
+    const invoiceDate = b.invoiceDate || purchasedAt.slice(0, 10);
+    if (Number.isNaN(Date.parse(invoiceDate))) throw new BadRequestException('Fecha de factura no válida');
+    return this.db.tenant(req, async c => {
+      await this.checkSupplier(c, s.tenantId, b.supplierId);
+      const p = (await c.query(`INSERT INTO purchases
+          (tenant_id,supplier_id,invoice_number,purchased_at,invoice_date,due_date,status,payment_method,vat_deductible,notes)
+          VALUES($1,$2,$3,$4,$5,$6,'draft',$7,$8,$9) RETURNING id`,
+          [s.tenantId, b.supplierId || null, b.invoiceNumber?.trim() || null, purchasedAt, invoiceDate, b.dueDate || null,
+            b.paymentMethod || null, b.vatDeductible !== false, b.notes?.trim() || null])).rows[0];
+      await this.lines(c, s.tenantId, p.id, b.lines || [], b.supplierId);
+      return this.detail(c, s.tenantId, p.id);
+    });
+  }
+
+  @Patch(':id') async update(@Req() req: AuthRequest, @Param('id') id: string, @Body() b: PurchaseBody) {
+    const s = this.session(req, true);
+    if (b.invoiceDate && Number.isNaN(Date.parse(b.invoiceDate))) throw new BadRequestException('Fecha de factura no válida');
+    return this.db.tenant(req, async c => {
+      const p = (await c.query("SELECT status,supplier_id FROM purchases WHERE tenant_id=$1 AND id=$2 FOR UPDATE", [s.tenantId, id])).rows[0];
+      if (!p) throw new BadRequestException('Pedido no encontrado');
+      if (p.status !== 'draft') throw new BadRequestException('Solo se pueden editar pedidos en borrador');
+      const supplierId = b.supplierId === undefined ? p.supplier_id : b.supplierId || null;
+      await this.checkSupplier(c, s.tenantId, supplierId);
+      await c.query(`UPDATE purchases SET supplier_id=$3,invoice_number=coalesce($4,invoice_number),
+          invoice_date=coalesce($5,invoice_date),due_date=coalesce($6,due_date),payment_method=coalesce($7,payment_method),
+          vat_deductible=coalesce($8,vat_deductible),notes=coalesce($9,notes)
+        WHERE tenant_id=$1 AND id=$2`,
+        [s.tenantId, id, supplierId, b.invoiceNumber?.trim() || null, b.invoiceDate || null, b.dueDate || null,
+          b.paymentMethod || null, b.vatDeductible ?? null, b.notes?.trim() || null]);
+      if (b.lines) await this.lines(c, s.tenantId, id, b.lines, supplierId);
+      return this.detail(c, s.tenantId, id);
+    });
+  }
+
+  @Post(':id/duplicate') async duplicate(@Req() req: AuthRequest, @Param('id') id: string) {
+    const s = this.session(req, true);
+    return this.db.tenant(req, async c => {
+      const source = (await c.query('SELECT supplier_id,invoice_date,due_date,payment_method,vat_deductible,notes FROM purchases WHERE tenant_id=$1 AND id=$2', [s.tenantId, id])).rows[0];
+      if (!source) throw new BadRequestException('Pedido no encontrado');
+      const lines = (await c.query(`SELECT ingredient_id,description,quantity,package_count,unit_price_net,vat_rate
+        FROM purchase_lines WHERE tenant_id=$1 AND purchase_id=$2`, [s.tenantId, id])).rows;
+      if (!lines.length) throw new BadRequestException('El pedido no tiene líneas');
+      const created = (await c.query(`INSERT INTO purchases(tenant_id,supplier_id,purchased_at,invoice_date,due_date,payment_method,vat_deductible,notes,status)
+        VALUES($1,$2,now(),$3,$4,$5,$6,$7,'draft') RETURNING id`,
+        [s.tenantId, source.supplier_id, source.invoice_date, source.due_date, source.payment_method, source.vat_deductible, source.notes])).rows[0];
+      let net = 0, vat = 0;
+      for (const l of lines) {
+        const n = Number((Number(l.quantity) * Number(l.unit_price_net)).toFixed(2)), v = Number((n * Number(l.vat_rate) / 100).toFixed(2));
+        net += n; vat += v;
+        await c.query(`INSERT INTO purchase_lines(tenant_id,purchase_id,ingredient_id,description,quantity,package_count,unit_price_net,vat_rate,line_net,line_vat,line_gross)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          [s.tenantId, created.id, l.ingredient_id, l.description, l.quantity, l.package_count, l.unit_price_net, l.vat_rate, n, v, n + v]);
+      }
+      await c.query('UPDATE purchases SET net_total=$3,vat_total=$4,gross_total=$3+$4 WHERE tenant_id=$1 AND id=$2', [s.tenantId, created.id, net, vat]);
+      return this.detail(c, s.tenantId, created.id);
+    });
+  }
+
+  /** Recibe la mercancía (total o parcialmente), actualiza stock y registra el gasto una sola vez. */
+  @Post(':id/receive') async receive(@Req() req: AuthRequest, @Param('id') id: string, @Body() b: ReceiveBody) {
+    const s = this.session(req, true);
+    return this.db.tenant(req, async c => {
+      const p = (await c.query('SELECT * FROM purchases WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [s.tenantId, id])).rows[0];
+      if (!p || !['draft', 'partially_received'].includes(p.status)) throw new BadRequestException('Pedido inexistente, cancelado o ya recibido');
+      const lines = (await c.query(`SELECT pl.id,pl.ingredient_id "ingredientId",pl.description,pl.quantity,
+          pl.received_quantity "receivedQuantity",pl.receipt_note "receiptNote",pl.unit_price_net "unitPriceNet",pl.vat_rate "vatRate"
+        FROM purchase_lines pl WHERE pl.tenant_id=$1 AND pl.purchase_id=$2 FOR UPDATE`, [s.tenantId, id])).rows;
+      const requested = b?.lines;
+      if (requested !== undefined && (!Array.isArray(requested) || !requested.length)) throw new BadRequestException('Indica al menos una línea que recibir');
+      if (requested && new Set(requested.map(line => line.lineId)).size !== requested.length) throw new BadRequestException('No repitas líneas en la recepción');
+      const receivedMap = new Map((requested || []).map(line => [line.lineId, { quantity: Number(line.quantity), note: String(line.note || '').trim() }]));
+      let receivedNet = 0, receivedVat = 0, receivedLines = 0;
+      for (const line of lines) {
+        if (!line.ingredientId) continue; // Las líneas libres no mueven inventario.
+        const remaining = Number(line.quantity) - Number(line.receivedQuantity);
+        const entry = receivedMap.get(line.id);
+        const quantity = requested === undefined ? remaining : (entry?.quantity ?? 0);
+        if (quantity === 0) continue;
+        if (!Number.isFinite(quantity) || quantity < 0 || quantity > remaining) throw new BadRequestException('La cantidad recibida supera lo pendiente o no es válida');
+        const ingredient = (await c.query('SELECT current_stock,current_unit_cost FROM ingredients WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [s.tenantId, line.ingredientId])).rows[0];
+        if (!ingredient) throw new BadRequestException('Artículo de inventario no disponible');
+        const cost = Number(line.unitPriceNet), stock = Number(ingredient.current_stock), oldCost = Number(ingredient.current_unit_cost), newStock = stock + quantity;
+        await c.query('UPDATE ingredients SET current_unit_cost=CASE WHEN $3>0 THEN ($4*$5+$6*$7)/$3 ELSE $7 END,current_stock=$3 WHERE tenant_id=$1 AND id=$2',
+          [s.tenantId, line.ingredientId, newStock, stock, oldCost, quantity, cost]);
+        await c.query(`UPDATE purchase_lines SET received_quantity=received_quantity+$3,receipt_note=CASE WHEN $4='' THEN receipt_note ELSE concat_ws(chr(10),nullif(receipt_note,''),$4) END WHERE tenant_id=$1 AND id=$2`,
+          [s.tenantId, line.id, quantity, entry?.note || '']);
+        await c.query(`INSERT INTO stock_movements(tenant_id,ingredient_id,movement_type,quantity_delta,unit_cost,source_type,source_id,created_by)
+          VALUES($1,$2,'purchase',$3,$4,'purchase',$5,$6)`, [s.tenantId, line.ingredientId, quantity, cost, id, s.userId]);
+        const net = round(quantity * cost), vat = round(net * Number(line.vatRate) / 100);
+        receivedNet += net; receivedVat += vat; receivedLines++;
+      }
+      if (requested) for (const lineId of receivedMap.keys()) if (!lines.some(line => line.id === lineId)) throw new BadRequestException('La línea no pertenece a este pedido');
+      if (!receivedLines) throw new BadRequestException('No quedan cantidades pendientes por recibir');
+      const pending = Number((await c.query('SELECT count(*)::int count FROM purchase_lines WHERE tenant_id=$1 AND purchase_id=$2 AND ingredient_id IS NOT NULL AND received_quantity<quantity', [s.tenantId, id])).rows[0].count);
+      const status = pending === 0 ? 'received' : 'partially_received';
+      await c.query(`UPDATE purchases SET status=$3,received_net_total=received_net_total+$4,received_vat_total=received_vat_total+$5,received_gross_total=received_gross_total+$4+$5 WHERE tenant_id=$1 AND id=$2`,
+        [s.tenantId, id, status, round(receivedNet), round(receivedVat)]);
+      if (status === 'received') {
+        const deductible = p.vat_deductible !== false;
+        const vat = deductible ? Number(p.vat_total) : 0;
+        await c.query(`INSERT INTO ledger_entries(tenant_id,entry_date,entry_type,category,account,amount_net,vat,total,source_type,source_id,reference,notes,created_by)
+          VALUES($1,$2,'expense','compras',$3,$4,$5,$6,'purchase',$7,$8,$9,$10)
+          ON CONFLICT (tenant_id,source_type,source_id) DO NOTHING`,
+          [s.tenantId, p.invoice_date, p.payment_method === 'card' ? 'bank' : 'cash', p.net_total, vat, round(Number(p.net_total) + vat),
+            id, p.invoice_number, deductible ? null : 'IVA no deducible', s.userId]);
+      }
+      return { ok: true, status, receivedLines, receivedNet: round(receivedNet), receivedVat: round(receivedVat), receivedGross: round(receivedNet + receivedVat), ledgerEntry: status === 'received' };
+    });
+  }
+
+  /** Pagos totales o parciales; el gasto contable ya se registró al recibir. */
+  @Post(':id/payments') async pay(@Req() req: AuthRequest, @Param('id') id: string, @Body() b: PaymentBody) {
+    const s = this.session(req, true);
+    const amount = num(b.amount);
+    if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException('Importe de pago no válido');
+    return this.db.tenant(req, async c => {
+      const p = (await c.query('SELECT status,payment_method,paid_amount,gross_total FROM purchases WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [s.tenantId, id])).rows[0];
+      if (!p || p.status !== 'received') throw new BadRequestException('Solo se pueden pagar pedidos recibidos');
+      if (Number(p.paid_amount) + amount > Number(p.gross_total) + 0.01) throw new BadRequestException('El pago supera el total del pedido');
+      const account = b.account || (b.method === 'card' || p.payment_method === 'card' ? 'bank' : 'cash');
+      if (!['cash', 'bank'].includes(account)) throw new BadRequestException('Cuenta no válida');
+      await c.query(`INSERT INTO purchase_payments(tenant_id,purchase_id,amount,method,account,reference,created_by)
+        VALUES($1,$2,$3,$4,$5,$6,$7)`, [s.tenantId, id, amount, b.method || p.payment_method || 'cash', account, b.reference?.trim() || null, s.userId]);
+      const paid = round(Number(p.paid_amount) + amount);
+      const paymentStatus = paid + 0.001 >= Number(p.gross_total) ? 'paid' : 'partial';
+      await c.query('UPDATE purchases SET paid_amount=$3,payment_status=$4 WHERE tenant_id=$1 AND id=$2', [s.tenantId, id, paid, paymentStatus]);
+      return { paidAmount: paid, paymentStatus, pendingAmount: round(Number(p.gross_total) - paid) };
+    });
+  }
+
+  @Post(':id/cancel') async cancel(@Req() req: AuthRequest, @Param('id') id: string) { return this.voidPurchase(req, id); }
+
+  @Post(':id/void') async voidPurchase(@Req() req: AuthRequest, @Param('id') id: string) {
+    const s = this.session(req, true);
+    return this.db.tenant(req, async c => {
+      const p = (await c.query('SELECT status,paid_amount FROM purchases WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [s.tenantId, id])).rows[0];
+      if (!p) throw new BadRequestException('Pedido no encontrado');
+      if (Number(p.paid_amount) > 0) throw new BadRequestException('El pedido tiene pagos registrados');
+      if (p.status === 'void') throw new BadRequestException('El pedido ya está anulado');
+      await c.query("UPDATE purchases SET status='void' WHERE tenant_id=$1 AND id=$2", [s.tenantId, id]);
+      return { ok: true };
+    });
+  }
 }
 
 @ApiTags('suppliers')

@@ -54,6 +54,39 @@ La interfaz de comanda inicial está en modo MVP: agrupa localmente la selecció
 ## Mesas y cobro
 
 `dining_tables` guarda cada mesa con su zona (Salón, Terraza, Barra…), plazas, forma y posición en una cuadrícula del plano. `orders.table_id` vincula la comanda con su mesa y un índice único parcial garantiza una sola comanda activa (`open`/`sent`) por mesa: al abrir una comanda sobre una mesa ocupada, la API devuelve la existente y las nuevas líneas se suman a ella. El mapa muestra cada mesa como libre, comanda sin enviar, en cocina o con cobro parcial. Los pagos aceptan dos formas: tarjeta (datáfono TPV) y efectivo, guardando efectivo entregado y cambio; se pueden dividir en varios pagos. Al completar el total la comanda pasa a `paid` y la mesa queda libre.
+ Dos mesas contiguas y alineadas se pueden unir: la resultante tiene forma `rect`, ocupa varias casillas (`span_x`/`span_y`), suma las plazas y guarda en `merged_from` el estado previo para poder separarlas.
+
+### Referencia única de formas, medidas y capacidad (#15)
+
+Tabla de referencia del plano. Las medidas son centímetros enteros; la capacidad es **recomendada** y se puede sobrescribir con aviso cuando se desvía más de 2 plazas.
+
+| Forma | Medidas admitidas | Capacidad recomendada | Dibujo |
+|---|---|---|---|
+| Redonda | Diámetro 50-200 cm (catálogo 70/90/120/150; precisión 0,5 cm) | 70→3, 90→4, 120→8, 150→10 | Círculo de diámetro `diameter_cm` |
+| Cuadrada | Lado 50-150 cm (catálogo 70/80/90/100/120) | 70→2, 80→4, 90→4, 100→6, 120→8 | Cuadrado de `width_cm = height_cm` |
+| Rectangular | Ancho 80-240 cm, alto 60-120 cm | 60 cm lineales por comensal en los lados largos + 1 por lado corto | Rectángulo `width_cm × height_cm` |
+| Barra | Rectángulo estrecho de 60 cm de alto | 1 por taburete | Rectángulo de un lado |
+
+Regla común: 60 cm lineales por comensal, con margen para sillas. Capacidad mínima 1 y máxima 20. La rotación se trata por separado; no cambia la capacidad.
+
+Escala de dibujo: `px = cm × 2` al 100 %, con zoom del 50-300 % y ajuste al ancho de la sala. Separación mínima entre mesas: 40 cm; un solapamiento se señala visualmente pero no bloquea la edición. Una unión se dibuja como una envolvente única y su capacidad es la suma de las mesas que la forman.
+
+Las issues `#36`, `#37` y `#38` son la configuración/validación de cada forma; `#11`, `#12` y `#13` son el diseño visual; `#42` aplica la escala; `#14` define las uniones. Se mantienen como sub-tareas y se cierran al implementarlas, no se fusionan.
+### Mapa de mesas en tiempo real (#16)
+
+El plano mantiene los cuatro estados y la leyenda, y recibe los cambios de comanda por SSE: `GET /api/tables/events` emite `tables-changed` cada 5 s con la sesión de la cookie; el cliente recarga `GET /api/tables` al recibirlo. El polling de 30 s queda como respaldo si se cierra la conexión. En pantallas pequeñas el plano se sustituye por una lista de mesas con el mismo estado y el importe pendiente; las acciones táctiles usan botones grandes y el modo edición sigue restringido a `admin`/`manager`.
+
+### Visualización del mapa (#41)
+
+Maqueta acordada para el plano: pestaña de sala arriba, leyenda fija con contador por estado, plano a la izquierda y panel de mesa a la derecha; en móvil el panel pasa debajo y el plano se desplaza horizontalmente. Dos modos diferenciados por un botón permanente: **servicio** (abrir comanda y cobrar) y **edición** (mover, crear, renombrar y archivar), restringida a `admin`/`manager`.
+
+Estados y paleta: verde `libre`, ámbar `comanda sin enviar`, azul `en cocina/servida`, rojo `cobro parcial` (`reservada` queda fuera de alcance hasta aprobarla). El estado nunca se comunica solo con color: la etiqueta y el icono/texto acompañan al punto de la leyenda; se exige contraste AA sobre fondo claro.
+
+Interacción: arrastre para mover, confirmación visual al crear/mover y posibilidad de reintentar si la API rechaza el cambio; el zoom va del 50 % al 300 % en pasos del 25 % con botones `−`/`+` y un botón `Ajustar` que vuelve al 100 %. Los objetivos táctiles miden al menos 44 px y se separan para evitar dobles toques en tablet.
+
+### Escala real del plano (#42)
+
+El plano usa una escala de `1 cm = 2 px` al 100 %: cada casilla representa 40 cm y mide 80 px. El ancho y alto en centímetros de cada mesa (`width_cm`/`height_cm`, o `diameter_cm` en las redondas) determinan cuántas casillas ocupa; las uniones suman su envolvente. El zoom del 50 % al 300 % cambia el tamaño de la casilla sin redondear las medidas guardadas, y `Ajustar` vuelve al 100 %. El contenedor permite desplazamiento cuando la sala no cabe en pantalla, y la proporción de la mesa se conserva al redimensionar la ventana.
 
 ## Perfil de cocina
 
@@ -68,6 +101,49 @@ La configuración de impresora se guarda en `tenant_kitchen_settings`. Cocina pu
 ## Finanzas
 
 `GET /reports/daily` consulta pedidos pagados por fecha de cierre local, pagos por fecha local, facturas de proveedores recibidas y gastos operativos. Devuelve coste neto y bruto por proveedor, IVA de compra marcado como deducible, IVA deducible de gastos, IVA repercutido, estimación de liquidación, consumo de ingredientes, margen bruto, resultado operativo y ejecución de presupuestos. Cada ingrediente guarda formato (por ejemplo, pack de seis briks), cantidad base por paquete y precio neto por paquete. La recepción convierte paquetes a cantidades de inventario y actualiza el coste medio ponderado; los movimientos de venta guardan el coste aplicado. La fecha de negocio respeta `tenants.timezone`. Las líneas conservan precio e IVA históricos aunque cambie el catálogo. La liquidación de IVA es orientativa y debe verificarse con facturas y normativa.
+
+### Libro de cuentas (#30)
+
+`ledger_entries` es el registro único: fecha de operación, tipo (`income`/`expense`), categoría, cuenta (`cash`/`bank`), base, IVA y total, con `source_type`/`source_id` y un índice único parcial que evita duplicar apuntes al reintentar. Cobrar una comanda genera un ingreso `ventas` con los totales históricos de la orden; recibir una compra genera un gasto `compras` con el IVA solo si es deducible. Los apuntes manuales exigen categoría, fecha e importe positivo y guardan el usuario. `GET /api/ledger?from=&to=&category=&account=` devuelve el detalle paginado, totales por tipo y desglose por categoría; el saldo del periodo es ingresos menos gastos con IVA. Consultan `admin`, `manager` y `cashier`; escriben `admin` y `manager`.
+
+### Resumen financiero (#31)
+
+`GET /api/reports/daily` acepta `date` con `period` (`day`, `week`, `month`, `year`; por defecto el mes en curso) o un rango libre `from`+`to` en formato `YYYY-MM-DD`. El rango exige ambas fechas, `from <= to` y un máximo de 2 años; cualquier otro caso devuelve 400 con un mensaje concreto. Todas las fechas de operación usan `tenants.timezone`. La respuesta mantiene los KPIs y desgloses anteriores (ventas, cobros, compras por proveedor, coste de ingredientes, gastos por categoría, presupuestos y liquidación estimada de IVA) y añade `kpis` y `comparison`: el periodo anterior tiene exactamente la misma duración y cada KPI muestra valor actual, anterior, variación absoluta en euros y variación porcentual (null cuando el anterior es 0, sin divisiones por cero). El resultado neto distingue margen bruto (ventas netas − consumo valorado de ingredientes), resultado operativo (margen bruto − gastos operativos − sueldos de `salary_entries` confirmados/pagados, si la tabla existe) y resultado neto (resultado operativo − impuestos de `tax_periods` presentados y `other_taxes` pagados, si existen). El saldo de IVA estimado se muestra aparte: es una obligación, no un gasto, y no se resta dos veces. `coherence` comprueba que la suma por proveedor cuadra con el total de compras, que los pagos cuadran con las ventas cobradas (tolerancia 0,02 €) y expone ingresos, gastos y saldo del libro `ledger_entries` del mismo rango junto al último arqueo de caja. `GET /api/reports/daily.csv?...` genera en servidor el mismo desglose (fecha, periodo, cada KPI con su comparativa, proveedores, categorías, pagos y totales del libro) en CSV con BOM para Excel en es-ES; el navegador permite además imprimir/PDF. Con datos vacíos todo se muestra a 0,00 €. Consultan `admin`, `manager` y `cashier`; `waiter` y `kitchen` reciben 403.
+### Mesa rectangular: medidas y capacidad (#38)
+
+`shape='rect'` incorpora `width_cm` (80-240 cm), `height_cm` (60-120 cm) y `sides_used` (`long1`, `long2`, `short1`, `short2`). La capacidad recomendada se calcula con 60 cm por comensal en cada lado largo y una plaza por lado corto, limitada a 1-20; se permite sobrescribirla y `GET /api/tables` devuelve `widthCm`, `heightCm`, `sidesUsed`, `seatsRecommended` y `seatsWarning` si la desviación supera dos plazas. La migración convierte las barras existentes en rectangulares de 120 × 60 cm con un lado largo, sin tocar sus comandas.
+
+### Mesa cuadrada: medidas y capacidad (#37)
+
+`dining_tables.width_cm` y `height_cm` se guardan iguales para las mesas cuadradas. El catálogo propone 70→2, 80→4, 90→4, 100→6 y 120→8 plazas; la API exige un lado entero de 50 a 150 cm y una capacidad de 1 a 20, editable. `GET /api/tables` devuelve `widthCm`, `heightCm`, `seatsRecommended` y `seatsWarning` cuando la capacidad se desvía más de dos plazas. La migración asigna 80 cm de lado a las mesas cuadradas existentes; cambiar el lado no afecta a la comanda abierta.
+
+### Mesa redonda: medidas y capacidad (#36)
+
+`dining_tables.diameter_cm` guarda diámetros de 50 a 200 cm en pasos de 0,5 cm. El catálogo de referencia propone 70→3, 90→4, 120→8 y 150→10 comensales, pero la API admite medidas intermedias y una capacidad editable de 1 a 20. `GET /api/tables` devuelve `diameterCm`, `seatsRecommended` y `seatsWarning` (desviación superior a una plaza); la migración asigna 90 cm a las mesas redondas existentes de hasta 4 plazas y 120 cm al resto. Cambiar la medida no toca la comanda abierta; solo se actualizan los campos de la mesa.
+
+### Compras a proveedores (#59)
+
+Las facturas guardan fecha de factura y vencimiento propios (la zona horaria del local decide la fecha de operación), forma de pago, IVA deducible, notas y estado de pago `pending`/`partial`/`paid` con importe pagado. Las líneas pueden ser de ingrediente (mueven stock y recalculan coste medio ponderado) o libres con descripción, base e IVA (menaje, portes; no afectan al inventario). `POST /api/purchases/:id/receive` bloquea la factura, actualiza cada ingrediente y su movimiento `purchase`, y escribe **una sola vez** el gasto `compras` en el libro con `source_type='purchase'` y la fecha de factura; el IVA solo entra si la factura es deducible. La recepción es irreversible y cualquier línea inválida revierte toda la operación. `POST /api/purchases/:id/payments` guarda pagos parciales o totales con cuenta `cash`/`bank` sin duplicar el gasto. `GET /api/purchases?from=&to=&supplierId=&status=` filtra por fecha de factura y estado (de recepción o de pago) y devuelve totales, saldo pendiente y detalle por factura. Consultan `admin`, `manager` y `cashier`; escriben solo `admin` y `manager`.
+
+### Sueldos (#60)
+
+`employees` guarda la plantilla (nombre, NIF opcional, puesto, alta/baja, usuario opcional y cuenta de pago) y `salary_entries` la nómina mensual por empleado. Se introducen bruto, SS de empresa, SS del trabajador, IRPF retenido y otros conceptos; el neto se calcula como `bruto + otros − IRPF − SS trabajador` y nunca se edita a mano. No se permite duplicar empleado/mes sin confirmación explícita. Al confirmar se escriben dos gastos únicos en el libro (`source_type` `salary` y `salary_ss`) con fecha del mes y categorías `Personal` y `Seguridad Social`, protegidos por el índice único parcial para reintentos. Una nómina confirmada no se modifica: se anula, se registra la regularización compensatoria con rastro y se crea otra. La baja impide nuevas nóminas de meses posteriores. `GET /api/salaries` devuelve el detalle y el coste total de plantilla; `GET /api/reports/daily` añade `personal` con su peso sobre ventas y lo descuenta del resultado operativo. `admin`/`manager` gestionan; `cashier` solo consulta totales.
+
+### Impuestos (#61)
+
+`tax_settings` fija frecuencia (`monthly`/`quarterly`), régimen, día de vencimiento y umbral de aviso. `POST /api/tax/periods/generate` crea los periodos del año (`AAAA-MM` o `AAAA-QQ`) y guarda el cálculo: IVA repercutido de pedidos pagados y soportado deducible de compras recibidas y gastos, ambos por fecha de operación en la zona horaria del local. Cada operación queda en `tax_period_entries` para auditar el periodo; el resultado se redondea a 2 decimales y se registra el ajuste. Los periodos cerrados se congelan: no se recalculan aunque se editen facturas posteriores y muestran la diferencia. Cerrar un periodo con saldo positivo crea un único gasto `Impuestos` en el libro con `source_type='tax_period'`; pagarlo solo cambia el estado. Otros impuestos (IBI, tasas) se registran con justificante y se contabilizan al pagarse. `GET /api/tax/alerts` avisa de vencimientos en 15 días. El panel muestra siempre el descargo de cálculo orientativo. Solo `admin` gestiona; `manager` consulta.
+
+### Tesorería (#62)
+
+`treasury_accounts` registra caja y banco con saldo inicial auditado (motivo obligatorio si es negativo) y una sola cuenta activa por tipo. El saldo es `inicial + ingresos del libro − gastos del libro − traspasos salientes + traspasos entrantes`; los traspasos se guardan en `treasury_transfers` y no alteran el total. `treasury_commitments` recoge facturas y nóminas pendientes con vencimiento; `POST /api/treasury/commitments/sync` las trae desde `purchases` y `salary_entries` cuando esas tablas existen, sin duplicarlas gracias al índice único por origen. «Disponible real» = saldo total − compromisos. `GET /api/treasury/summary?days=` devuelve cuentas, vencimientos, evolución por fecha/cuenta y el último cierre de caja para contrastar el efectivo. Un traspaso que deja una cuenta en negativo exige confirmación y motivo. `admin`/`manager` gestionan; `cashier` solo ve la cuenta de caja y sus compromisos.
+
+### Estado de resultados (#63)
+
+`GET /api/reports/income-statement?from=&to=` calcula una estructura fija: ingresos por ventas (pedidos pagados en la zona horaria del local) → coste de mercancía (consumo real por receta) → margen bruto → personal (nóminas confirmadas si existen) → suministros y otros gastos → EBITDA → amortización manual → resultado antes de impuestos → impuestos (IVA liquidado y otros impuestos pagados) → resultado neto. Cada línea muestra su fórmula y `sources`; la pantalla filtra los apuntes del libro (`ledger_entries`) que la componen. La respuesta incluye la comparativa con el mismo rango del año anterior y con el periodo previo de igual duración, el acumulado anual y los indicadores de margen bruto, coste de personal sobre ventas, ticket medio y punto de equilibrio; sin ventas se muestra `—` en lugar de divisiones por cero. `GET /api/reports/income-statement.csv` exporta el mismo desglose. Solo `admin` y `manager` acceden.
+
+### Pérdidas (#64)
+
+Todo ajuste negativo de inventario exige motivo (`waste`, `breakage`, `staff_meal`, `invitation`, `count_error`, `expiry`, `other`) y guarda el coste unitario aplicado y el valor de la pérdida (`loss_value`) en el movimiento; el historial anterior se clasifica como `other`. Las invitaciones se registran desde TPV como pérdida (nunca como venta a 0 €) y los descuadres de cierre se importan con signo y fecha de negocio. `GET /api/reports/losses?from=&to=` suma ambos orígenes sin duplicarlos y devuelve total, desglose por motivo/producto/empleado, porcentaje sobre ventas y aviso cuando supera el umbral configurable. Los periodos con resultado negativo se muestran como resultado en `#63`, no como pérdida operativa. `admin`/`manager` gestionan y consultan; `cashier` solo ve sus propios descuadres.
 
 ## Esquema SQL
 
@@ -96,6 +172,11 @@ Cookie de sesión requerida en todos salvo el bootstrap y login. Roles: `admin` 
 | POST | `/api/recipes/:productId` | Reemplazar receta y definir extras permitidos mediante `allowedIngredientIds` |
 | GET / POST | `/api/tables` | Mapa de mesas con el estado de su comanda activa / crear mesa (admin, manager) |
 | PATCH / DELETE | `/api/tables/:id` | Renombrar, mover en el plano o retirar una mesa (solo sin comanda abierta) |
+| POST | `/api/tables/:id/join` | Une la mesa con otra contigua y alineada (`{ withId }`); la comanda abierta pasa a la unida |
+| POST | `/api/tables/:id/split` | Deshace la última unión y devuelve la otra mesa a su sitio |
+| GET | `/api/tables` | Incluye `diameterCm`, `seatsRecommended` y `seatsWarning` de mesas redondas |
+| GET | `/api/tables` | Incluye también `widthCm` y `heightCm` de mesas cuadradas |
+| GET | `/api/tables` | Incluye `sidesUsed` y la capacidad calculada por lados de mesas rectangulares |
 | GET | `/api/categories` | Categorías de la carta |
 | GET | `/api/products/admin` | Carta completa para gestión, incluidos productos retirados |
 | DELETE | `/api/products/:id` | Quitar producto de la carta (se desactiva para conservar el histórico) |
@@ -119,7 +200,8 @@ Cookie de sesión requerida en todos salvo el bootstrap y login. Roles: `admin` 
 | GET / POST | `/api/suppliers` | Listar/crear proveedores |
 | POST | `/api/expenses` | Registrar gasto operativo con base e IVA |
 | POST | `/api/budgets` | Crear o actualizar presupuesto mensual por categoría |
-| GET | `/api/reports/daily?date=YYYY-MM-DD` | Resumen diario de ventas, IVA, pagos, compras y margen estimado |
+| GET | `/api/reports/daily?date=YYYY-MM-DD&period=day\|week\|month\|year` o `?from=&to=` | Resumen financiero con comparativa, resultado neto y cuadres |
+| GET | `/api/reports/daily.csv?from=&to=` | CSV del mismo resumen para Excel |
 | POST | `/api/cash-closures` | Registrar arqueo y diferencia de caja |
 
 ## Arranque

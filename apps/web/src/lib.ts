@@ -5,7 +5,10 @@ export const API = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 export const DEMO = import.meta.env.VITE_DEMO_MODE === 'true';
 
 export type DiningTable = {
-  id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar'; posX: number; posY: number; qrToken?: string;
+  id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar' | 'rect'; posX: number; posY: number; qrToken?: string;
+  diameterCm?: number | null; widthCm?: number | null; heightCm?: number | null; sidesUsed?: string[]; seatsRecommended?: number | null; seatsWarning?: boolean;
+  /** Casillas que ocupa; joinedCount = uniones que se pueden deshacer. */
+  spanX: number; spanY: number; joinedCount: number;
   activeOrder: null | { id: string; orderNumber: number; status: 'open' | 'pending_approval' | 'sent'; openedAt: string; grossTotal: number; paidTotal: number; lineCount: number };
 };
 export type OrderDetail = {
