@@ -71,6 +71,9 @@ Regla común: 60 cm lineales por comensal, con margen para sillas. Capacidad mí
 Escala de dibujo: `px = cm × 2` al 100 %, con zoom del 50-300 % y ajuste al ancho de la sala. Separación mínima entre mesas: 40 cm; un solapamiento se señala visualmente pero no bloquea la edición. Una unión se dibuja como una envolvente única y su capacidad es la suma de las mesas que la forman.
 
 Las issues `#36`, `#37` y `#38` son la configuración/validación de cada forma; `#11`, `#12` y `#13` son el diseño visual; `#42` aplica la escala; `#14` define las uniones. Se mantienen como sub-tareas y se cierran al implementarlas, no se fusionan.
+### Mapa de mesas en tiempo real (#16)
+
+El plano mantiene los cuatro estados y la leyenda, y recibe los cambios de comanda por SSE: `GET /api/tables/events` emite `tables-changed` cada 5 s con la sesión de la cookie; el cliente recarga `GET /api/tables` al recibirlo. El polling de 30 s queda como respaldo si se cierra la conexión. En pantallas pequeñas el plano se sustituye por una lista de mesas con el mismo estado y el importe pendiente; las acciones táctiles usan botones grandes y el modo edición sigue restringido a `admin`/`manager`.
 
 ## Finanzas
 

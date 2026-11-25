@@ -1,4 +1,5 @@
-import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Req, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, MessageEvent, Param, Patch, Post, Req, Sse, UnauthorizedException } from '@nestjs/common';
+import { interval, map, Observable } from 'rxjs';
 import { ApiTags } from '@nestjs/swagger';
 import { DbService, AuthRequest } from './db.service';
 
@@ -26,6 +27,12 @@ export class TablesController {
   private duplicate(e: unknown): never {
     if ((e as { code?: string }).code === '23505') throw new BadRequestException('Ya existe una mesa con ese nombre');
     throw e;
+  }
+
+  /** Eventos de cambio del mapa: el cliente recarga el estado al recibirlos. */
+  @Sse('events') events(@Req() req: AuthRequest): Observable<MessageEvent> {
+    this.session(req);
+    return interval(5000).pipe(map(() => ({ data: { type: 'tables-changed', at: new Date().toISOString() } } as MessageEvent)));
   }
 
   /** Mesas activas con el estado de su comanda abierta (si la hay). */
