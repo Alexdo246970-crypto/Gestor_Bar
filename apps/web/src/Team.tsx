@@ -18,6 +18,7 @@ export function Team() {
   const [members, setMembers] = useState<Member[]>([]);
   const [notice, setNotice] = useState(''), [error, setError] = useState('');
   const [saving, setSaving] = useState(false), [loading, setLoading] = useState(true);
+  const [selectedRole, setSelectedRole] = useState<Role>('kitchen');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -38,7 +39,7 @@ export function Team() {
       fullName: String(f.get('fullName') || '').trim(),
       email: String(f.get('email') || '').trim(),
       password: String(f.get('password') || ''),
-      role: (String(f.get('role') || 'kitchen') === 'waiter' ? 'waiter' : 'kitchen') as Role,
+      role: String(f.get('role') || 'kitchen') as Role,
       expiresAt: String(f.get('expiresAt') || '') || null,
     };
     try {
@@ -75,18 +76,18 @@ export function Team() {
   }
 
   return <section className="temporary-staff">
-    <div className="section-head"><div><h3>Equipo</h3><p>Altas de cocina y camareros, desactivación y revocación de sesiones.</p></div><button className="secondary" onClick={() => void load()}>Actualizar ↻</button></div>
+    <div className="section-head"><div><h3>Equipo</h3><p>Altas de cocina y perfiles temporales de sala o caja; desactivación y revocación de sesiones.</p></div><button className="secondary" onClick={() => void load()}>Actualizar ↻</button></div>
     {notice && <div className="order-notice">✓ {notice}</div>}
     {error && <div className="toast" onClick={() => setError('')}>{error} ×</div>}
     <div className="team-layout">
       <form className="package-modal staff-form" onSubmit={create}>
         <p className="eyebrow">NUEVO ACCESO</p>
         <h3>Crear usuario interno</h3>
-        <label>Rol<select name="role" defaultValue="kitchen"><option value="kitchen">Cocina</option><option value="waiter">Camarero</option></select></label>
+        <label>Rol<select name="role" value={selectedRole} onChange={e => setSelectedRole(e.target.value as Role)}><option value="kitchen">Cocina</option><option value="waiter">Camarero temporal</option><option value="cashier">Caja temporal</option></select></label>
         <label>Nombre completo<input name="fullName" required autoFocus /></label>
         <label>Email de acceso<input name="email" type="email" required /></label>
         <label>Contraseña temporal<input name="password" type="password" minLength={12} required /><small>Mínimo 12 caracteres</small></label>
-        <label>Caduca el (opcional)<input name="expiresAt" type="datetime-local" min={new Date(Date.now() + 60000).toISOString().slice(0, 16)} /><small>Déjalo vacío para un acceso sin caducidad.</small></label>
+        <label>Caduca el<input name="expiresAt" type="datetime-local" min={new Date(Date.now() + 60000).toISOString().slice(0, 16)} max={new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16)} required={selectedRole !== 'kitchen'} /><small>Obligatorio para perfiles temporales; máximo 30 días.</small></label>
         <button className="primary" disabled={saving}>{saving ? 'Creando perfil…' : 'Crear perfil →'}</button>
         <p className="finance-note">Cocina solo verá comandas y los ajustes de su impresora. No puede acceder a mesas, cobros, carta, inventario ni finanzas.</p>
       </form>
