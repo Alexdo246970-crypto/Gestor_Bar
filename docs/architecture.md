@@ -84,6 +84,10 @@ Estados y paleta: verde `libre`, ámbar `comanda sin enviar`, azul `en cocina/se
 
 Interacción: arrastre para mover, confirmación visual al crear/mover y posibilidad de reintentar si la API rechaza el cambio; el zoom va del 50 % al 300 % en pasos del 25 % con botones `−`/`+` y un botón `Ajustar` que vuelve al 100 %. Los objetivos táctiles miden al menos 44 px y se separan para evitar dobles toques en tablet.
 
+### Escala real del plano (#42)
+
+El plano usa una escala de `1 cm = 2 px` al 100 %: cada casilla representa 40 cm y mide 80 px. El ancho y alto en centímetros de cada mesa (`width_cm`/`height_cm`, o `diameter_cm` en las redondas) determinan cuántas casillas ocupa; las uniones suman su envolvente. El zoom del 50 % al 300 % cambia el tamaño de la casilla sin redondear las medidas guardadas, y `Ajustar` vuelve al 100 %. El contenedor permite desplazamiento cuando la sala no cabe en pantalla, y la proporción de la mesa se conserva al redimensionar la ventana.
+
 ## Finanzas
 
 `GET /reports/daily` consulta pedidos pagados por fecha de cierre local, pagos por fecha local, facturas de proveedores recibidas y gastos operativos. Devuelve coste neto y bruto por proveedor, IVA de compra marcado como deducible, IVA deducible de gastos, IVA repercutido, estimación de liquidación, consumo de ingredientes, margen bruto, resultado operativo y ejecución de presupuestos. Cada ingrediente guarda formato (por ejemplo, pack de seis briks), cantidad base por paquete y precio neto por paquete. La recepción convierte paquetes a cantidades de inventario y actualiza el coste medio ponderado; los movimientos de venta guardan el coste aplicado. La fecha de negocio respeta `tenants.timezone`. Las líneas conservan precio e IVA históricos aunque cambie el catálogo. La liquidación de IVA es orientativa y debe verificarse con facturas y normativa.

@@ -26,12 +26,16 @@ const rectRecommended = (width: number, sides: string[]) => {
   return Math.min(20, Math.max(1, Math.floor(width / 60) * longs + (sides.length - longs)));
 };
 const spanX = (t: DiningTable) => t.spanX || 1, spanY = (t: DiningTable) => t.spanY || 1;
-const covers = (t: DiningTable, x: number, y: number) => x >= t.posX && x < t.posX + spanX(t) && y >= t.posY && y < t.posY + spanY(t);
+/** Escala real del plano: 1 cm = 2 px al 100 %, cada casilla representa 40 cm. */
+const CM_PER_CELL = 40, PX_PER_CM = 2;
+const cellsX = (t: DiningTable) => Math.max(1, Math.round((t.widthCm ?? 80) / CM_PER_CELL), spanX(t));
+const cellsY = (t: DiningTable) => Math.max(1, Math.round((t.heightCm ?? 80) / CM_PER_CELL), spanY(t));
+const covers = (t: DiningTable, x: number, y: number) => x >= t.posX && x < t.posX + cellsX(t) && y >= t.posY && y < t.posY + cellsY(t);
 /** Dos mesas se pueden unir si están pegadas y alineadas, de modo que juntas formen un rectángulo. */
 export function canJoin(a: DiningTable, b: DiningTable) {
   if (a.id === b.id || a.zone !== b.zone || (a.activeOrder && b.activeOrder)) return false;
-  const horizontal = a.posY === b.posY && spanY(a) === spanY(b) && (a.posX + spanX(a) === b.posX || b.posX + spanX(b) === a.posX);
-  const vertical = a.posX === b.posX && spanX(a) === spanX(b) && (a.posY + spanY(a) === b.posY || b.posY + spanY(b) === a.posY);
+  const horizontal = a.posY === b.posY && cellsY(a) === cellsY(b) && (a.posX + cellsX(a) === b.posX || b.posX + cellsX(b) === a.posX);
+  const vertical = a.posX === b.posX && cellsX(a) === cellsX(b) && (a.posY + cellsY(a) === b.posY || b.posY + cellsY(b) === a.posY);
   return horizontal || vertical;
 }
 
@@ -98,9 +102,9 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
 
   async function move(id: string, posX: number, posY: number) {
     const t = tables.find(x => x.id === id); if (!t) return;
-    const w = spanX(t), h = spanY(t);
+    const w = cellsX(t), h = cellsY(t);
     if (posX + w > GRID_COLS || posY + h > GRID_ROWS) { setError('La mesa no cabe en esa posición del plano.'); return; }
-    if (zoneTables.some(o => o.id !== id && o.posX < posX + w && posX < o.posX + spanX(o) && o.posY < posY + h && posY < o.posY + spanY(o))) { setError('Hay otra mesa en ese hueco.'); return; }
+    if (zoneTables.some(o => o.id !== id && o.posX < posX + w && posX < o.posX + cellsX(o) && o.posY < posY + h && posY < o.posY + cellsY(o))) { setError('Hay otra mesa en ese hueco.'); return; }
     setTables(current => current.map(x => x.id === id ? { ...x, posX, posY } : x));
     try { await request(`/tables/${id}`, { method: 'PATCH', body: JSON.stringify({ posX, posY }) }); } catch (e) { setError((e as Error).message); void load(); }
   }
@@ -177,10 +181,10 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
     </div>
     <div className="legend">{(['free', 'open', 'sent', 'partial'] as TableState[]).map(st => <span key={st}><i className={`dot ${st}`} />{STATE_LABEL[st]} <b>{tables.filter(t => t.zone === currentZone && tableState(t) === st).length}</b></span>)}</div>
     <div className="tables-layout">
-      <div className="floor-scroll"><div className={`floor ${editMode ? 'editing' : ''}`} style={{ gridTemplateColumns: `repeat(${GRID_COLS}, minmax(0,1fr))`, transform: `scale(${zoom})`, transformOrigin: 'top left' }}>
+      <div className="floor-scroll"><div className={`floor ${editMode ? 'editing' : ''}`} style={{ gridTemplateColumns: `repeat(${GRID_COLS}, ${CM_PER_CELL * PX_PER_CM * zoom}px)`, gridTemplateRows: `repeat(${GRID_ROWS}, ${CM_PER_CELL * PX_PER_CM * zoom}px)` }}>
         {cells.map(({ x, y, table }) => table
           ? <button key={table.id} draggable={editMode} onDragStart={() => setDragId(table.id)} onDragEnd={() => setDragId(null)}
-              style={{ gridColumn: `${x + 1} / span ${spanX(table)}`, gridRow: `${y + 1} / span ${spanY(table)}` }}
+              style={{ gridColumn: `${table.posX + 1} / span ${cellsX(table)}`, gridRow: `${table.posY + 1} / span ${cellsY(table)}` }}
               onDragOver={e => { if (editMode && dragged && canJoin(dragged, table)) e.preventDefault(); }}
               onDrop={e => { e.preventDefault(); if (dragged && canJoin(dragged, table)) void joinTables(table, dragged); setDragId(null); }}
               className={`dining-table ${table.shape} ${tableState(table)} ${selectedId === table.id ? 'selected' : ''} ${dragged && canJoin(dragged, table) ? 'join-target' : ''}`}
@@ -241,7 +245,7 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
           <p className="eyebrow">{selected.zone.toUpperCase()} · {selected.seats} PLAZAS</p>
           <h3>{selected.label}</h3>
           <span className={`state-pill ${tableState(selected)}`}>{STATE_LABEL[tableState(selected)]}</span>
-          {selected.joinedCount > 0 && <p className="measure-info">{spanX(selected)} × {spanY(selected)} casillas · {selected.joinedCount} unión(es)</p>}
+          {selected.joinedCount > 0 && <p className="measure-info">{cellsX(selected)} × {cellsY(selected)} casillas · {selected.joinedCount} unión(es)</p>}
           {selected.diameterCm != null && <p className="measure-info">Ø {Number(selected.diameterCm).toFixed(1)} cm · {selected.seatsRecommended} plazas recomendadas</p>}
           {selected.shape === 'square' && selected.widthCm != null && <p className="measure-info">{Number(selected.widthCm)} × {Number(selected.heightCm)} cm · {selected.seatsRecommended} plazas recomendadas</p>}
           {selected.shape === 'rect' && selected.widthCm != null && <p className="measure-info">{Number(selected.widthCm)} × {Number(selected.heightCm)} cm · lados {selected.sidesUsed?.join(', ') || '—'} · {selected.seatsRecommended} plazas recomendadas</p>}
