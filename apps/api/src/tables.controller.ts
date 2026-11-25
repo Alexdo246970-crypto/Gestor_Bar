@@ -117,11 +117,13 @@ export class TablesController {
     const shape = b.shape ?? 'square';
     const m = this.measures(shape, b);
     return this.db.tenant(req, async c => {
+      const zone = b.zone?.trim() || 'Salón';
+      const room = (await c.query('SELECT id FROM rooms WHERE tenant_id=$1 AND lower(name)=lower($2)', [s.tenantId, zone])).rows[0];
       try {
         return (await c.query(`INSERT INTO dining_tables
-          (tenant_id,label,zone,seats,shape,pos_x,pos_y,diameter_cm,width_cm,height_cm,sides_used,seats_recommended)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12) RETURNING ${COLUMNS}, ${WARNING}`,
-          [s.tenantId, b.label!.trim(), b.zone?.trim() || 'Salón', m.seats, shape, b.posX ?? 0, b.posY ?? 0,
+          (tenant_id,label,zone,room_id,seats,shape,pos_x,pos_y,diameter_cm,width_cm,height_cm,sides_used,seats_recommended)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13) RETURNING ${COLUMNS}, ${WARNING}`,
+          [s.tenantId, b.label!.trim(), zone, room?.id ?? null, m.seats, shape, b.posX ?? 0, b.posY ?? 0,
             m.diameter, m.width, m.height, JSON.stringify(m.sides), m.recommended])).rows[0];
       } catch (e) { this.duplicate(e); }
     });
@@ -131,17 +133,19 @@ export class TablesController {
     const s = this.session(req, ['admin', 'manager']);
     this.validate(b, true);
     return this.db.tenant(req, async c => {
+      const room = b.zone ? (await c.query('SELECT id FROM rooms WHERE tenant_id=$1 AND lower(name)=lower($2)', [s.tenantId, b.zone.trim()])).rows[0] : null;
       const current: TableRow | undefined = (await c.query(`SELECT ${COLUMNS} FROM dining_tables WHERE tenant_id=$1 AND id=$2 AND active`, [s.tenantId, id])).rows[0];
       if (!current) throw new BadRequestException('Mesa no encontrada');
       const shape = b.shape ?? current.shape;
       const m = this.measures(shape, b, current);
       try {
-        const r = await c.query(`UPDATE dining_tables SET label=coalesce($3,label),zone=coalesce($4,zone),seats=$5,shape=$6,
+        const r = await c.query(`UPDATE dining_tables SET label=coalesce($3,label),zone=coalesce($4,zone),
+            room_id=coalesce($14,room_id),seats=$5,shape=$6,
             pos_x=coalesce($7,pos_x),pos_y=coalesce($8,pos_y),diameter_cm=$9,width_cm=$10,height_cm=$11,
             sides_used=$12::jsonb,seats_recommended=$13
           WHERE tenant_id=$1 AND id=$2 AND active RETURNING ${COLUMNS}, ${WARNING}`,
           [s.tenantId, id, b.label?.trim() ?? null, b.zone?.trim() || null, m.seats, shape, b.posX ?? null, b.posY ?? null,
-            m.diameter, m.width, m.height, JSON.stringify(m.sides), m.recommended]);
+            m.diameter, m.width, m.height, JSON.stringify(m.sides), m.recommended, room?.id ?? null]);
         if (b.label) await c.query("UPDATE orders SET table_label=$3 WHERE tenant_id=$1 AND table_id=$2 AND status IN ('open','sent')", [s.tenantId, id, r.rows[0].label]);
         return r.rows[0];
       } catch (e) { this.duplicate(e); }

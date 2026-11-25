@@ -1,10 +1,11 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { API, DiningTable, OrderDetail, euro, request } from './lib';
+import { API, DEMO, DiningTable, OrderDetail, euro, request } from './lib';
 import { PaymentModal } from './PaymentModal';
 
 export const GRID_COLS = 8, GRID_ROWS = 5;
 type TableState = 'free' | 'open' | 'sent' | 'partial';
 const STATE_LABEL: Record<TableState, string> = { free: 'Libre', open: 'Comanda sin enviar', sent: 'En cocina / servida', partial: 'Cobro parcial' };
+type Room = { id: string; name: string; widthCm: number; heightCm: number; sortOrder: number; active: boolean; tableCount: number; busyCount: number };
 
 export function tableState(t: DiningTable): TableState {
   if (!t.activeOrder) return 'free';
@@ -36,16 +37,38 @@ export function canJoin(a: DiningTable, b: DiningTable) {
 
 /** Plano de sala: cada mesa muestra en tiempo real el estado de su comanda. */
 export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenInPos: (table: { id: string; label: string }) => void }) {
-  const [tables, setTables] = useState<DiningTable[]>([]), [zone, setZone] = useState(''), [selectedId, setSelectedId] = useState<string | null>(null), [detail, setDetail] = useState<OrderDetail | null>(null), [editMode, setEditMode] = useState(false), [paying, setPaying] = useState<string | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [draft, setDraft] = useState<{ posX: number; posY: number } | null>(null), [dragId, setDragId] = useState<string | null>(null), [pendingZone, setPendingZone] = useState<string | null>(null);
+  const [tables, setTables] = useState<DiningTable[]>([]), [rooms, setRooms] = useState<Room[]>([]), [zone, setZone] = useState(''), [selectedId, setSelectedId] = useState<string | null>(null), [detail, setDetail] = useState<OrderDetail | null>(null), [editMode, setEditMode] = useState(false), [paying, setPaying] = useState<string | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [draft, setDraft] = useState<{ posX: number; posY: number } | null>(null), [dragId, setDragId] = useState<string | null>(null), [pendingZone, setPendingZone] = useState<string | null>(null);
 
-  async function load() { try { setTables(await request<DiningTable[]>('/tables')); } catch (e) { setError((e as Error).message); } }
+  async function load() {
+    try {
+      const [list, roomList] = await Promise.all([request<DiningTable[]>('/tables'), DEMO ? Promise.resolve([] as Room[]) : request<Room[]>('/rooms')]);
+      setTables(list); setRooms(roomList);
+    } catch (e) { setError((e as Error).message); }
+  }
+  async function addRoom() {
+    const name = prompt('Nombre de la nueva sala')?.trim(); if (!name) return;
+    try { const room = await request<Room>('/rooms', { method: 'POST', body: JSON.stringify({ name }) }); await load(); setZone(room.name); setNotice(`Sala «${room.name}» creada.`); }
+    catch (e) { setError((e as Error).message); }
+  }
+  async function renameRoom() {
+    const room = rooms.find(r => r.name === currentZone); if (!room) return;
+    const name = prompt('Nuevo nombre de la sala', room.name)?.trim(); if (!name || name === room.name) return;
+    try { await request(`/rooms/${room.id}`, { method: 'PATCH', body: JSON.stringify({ name }) }); await load(); setZone(name); setNotice('Sala renombrada; las mesas y comandas se han conservado.'); }
+    catch (e) { setError((e as Error).message); }
+  }
+  async function archiveRoom() {
+    const room = rooms.find(r => r.name === currentZone); if (!room) return;
+    if (!confirm(`¿Archivar «${room.name}»? Las mesas y el histórico se conservan.`)) return;
+    try { await request(`/rooms/${room.id}`, { method: 'DELETE' }); await load(); setZone(''); setNotice('Sala archivada.'); }
+    catch (e) { setError((e as Error).message); }
+  }
   useEffect(() => { void load(); const timer = setInterval(() => void load(), 30000);
     const events = new EventSource(`${API}/tables/events`, { withCredentials: true });
     events.onmessage = () => void load();
     return () => { clearInterval(timer); events.close(); };
   }, []);
 
-  const zones = useMemo(() => { const list = [...new Set(tables.map(t => t.zone))]; if (pendingZone && !list.includes(pendingZone)) list.push(pendingZone); return list.length ? list : ['Salón']; }, [tables, pendingZone]);
+  const zones = useMemo(() => { const list = rooms.length ? rooms.map(r => r.name) : [...new Set(tables.map(t => t.zone))]; if (pendingZone && !list.includes(pendingZone)) list.push(pendingZone); return list.length ? list : ['Salón']; }, [tables, rooms, pendingZone]);
   const currentZone = zones.includes(zone) ? zone : zones[0];
   const zoneTables = tables.filter(t => t.zone === currentZone);
   const selected = tables.find(t => t.id === selectedId) || null;
@@ -148,7 +171,9 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
       <article><span>Pendiente de cobro</span><strong>{euro(openAmount)}</strong><small>en sala</small></article>
     </div>
     <div className="zone-tabs">{zones.map(z => <button key={z} className={z === currentZone ? 'selected' : ''} onClick={() => { setZone(z); setSelectedId(null); setDraft(null); }}>{z}<span>{tables.filter(t => t.zone === z && t.activeOrder).length}/{tables.filter(t => t.zone === z).length}</span></button>)}
-      {editMode && <button className="zone-add" onClick={() => { const name = prompt('Nombre de la nueva zona (p. ej. Reservado)')?.trim(); if (name) { setPendingZone(name); setZone(name); setSelectedId(null); setDraft({ posX: 0, posY: 0 }); setNotice(`Añade la primera mesa de «${name}».`); } }}>＋ Zona</button>}
+      {editMode && !DEMO && <button className="zone-add" onClick={() => void addRoom()}>＋ Sala</button>}
+      {editMode && !DEMO && rooms.some(r => r.name === currentZone) && <button className="zone-add" onClick={() => void renameRoom()}>✎ Renombrar sala</button>}
+      {editMode && !DEMO && rooms.some(r => r.name === currentZone) && <button className="zone-add" onClick={() => void archiveRoom()}>Archivar sala</button>}
     </div>
     <div className="legend">{(['free', 'open', 'sent', 'partial'] as TableState[]).map(s => <span key={s}><i className={`dot ${s}`} />{STATE_LABEL[s]}</span>)}</div>
     <div className="tables-layout">
@@ -195,7 +220,7 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
           <p className="eyebrow">EDITAR MESA</p><h3>{selected.label}</h3>
           <p className="modal-description">Para moverla, arrástrala o toca una casilla vacía del plano.</p>
           <label>Nombre<input name="label" required defaultValue={selected.label} /></label>
-          <label>Zona<input name="zone" required defaultValue={selected.zone} list="zones-list" /><datalist id="zones-list">{zones.map(z => <option key={z} value={z} />)}</datalist></label>
+          <label>Sala<input name="zone" required defaultValue={selected.zone} list="zones-list" /><datalist id="zones-list">{zones.map(z => <option key={z} value={z} />)}</datalist></label>
           <label>Forma<select name="shape" defaultValue={selected.shape}><option value="square">Cuadrada</option><option value="round">Redonda</option><option value="rect">Rectangular</option><option value="bar">Barra / taburete</option></select></label>
           <label>Diámetro redonda (cm)<input name="diameterCm" type="number" min="50" max="200" step="0.5" list="round-diameters-edit" value={editDiameter} onChange={e => { const v = Number(e.target.value); setEditDiameter(v); setEditSeats(roundRecommended(v)); }} /></label>
           <datalist id="round-diameters-edit">{ROUND.map(([d, seats]) => <option key={d} value={d}>{seats} plazas recomendadas</option>)}</datalist>
