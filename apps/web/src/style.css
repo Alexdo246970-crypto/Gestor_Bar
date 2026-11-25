@@ -38,6 +38,8 @@
 .table-form .modal-actions{justify-content:space-between}
 .qr-settings-form{max-width:720px;margin:0 auto 20px;padding:18px;border:1px solid #dce8dc;border-radius:10px;background:#f8faf7}.pending-qr-review{max-width:620px;margin:20px auto;padding:18px;border:1px solid #f0d9ae;border-radius:10px;background:#fffaf0}.pending-qr-review h3{margin:6px 0}.pending-qr-review .pay-summary{margin:12px 0}
 .order-status.pending_approval{background:#fff1d5;color:#93600a}
+.kitchen-customer-note{padding:9px 11px;border-radius:7px;background:#fff4d8;color:#74551b;font-size:12px;line-height:1.45}
+.qr-customer-account{margin:16px 0;padding:14px;border:1px solid #e1e9df;border-radius:9px;background:#f8faf7}.qr-customer-account h3{margin:0 0 5px;font-size:14px}.qr-customer-account>p{font-size:10px;color:#738075}.qr-customer-account textarea{display:block;width:100%;min-height:72px;margin-top:5px;border:1px solid #dfe5df;border-radius:7px;padding:8px;font:inherit;font-size:11px}.qr-customer-history{display:grid;gap:8px;margin-top:15px}.qr-customer-history article{display:grid;gap:5px;padding:9px 0;border-top:1px solid #e8ede7;font-size:10px}.qr-customer-history small{color:#78857a}.qr-account-actions{display:flex;justify-content:space-between;align-items:center;margin-top:12px}
 .state-pill{display:inline-block;font-size:9px;border-radius:12px;padding:4px 8px;background:#eef3ee;color:#4d7955}.state-pill.free{background:#f1f3f0;color:#6f7b73}.state-pill.open{background:#fbf0dc;color:#98743d}.state-pill.sent{background:#e2efe5;color:#2f5d43}.state-pill.partial{background:#e3eef9;color:#3d6a98}
 .wide-secondary{width:100%;margin-top:14px;padding:11px}
 /* Cobro */

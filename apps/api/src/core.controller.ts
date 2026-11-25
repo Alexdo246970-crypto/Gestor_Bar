@@ -1,6 +1,7 @@
-import { BadRequestException, Body, Controller, Get, Post, Req, UnauthorizedException, ForbiddenException, Param, TooManyRequestsException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Headers, HttpException, Post, Req, UnauthorizedException, ForbiddenException, Param } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import * as argon2 from 'argon2';
+import { createHash } from 'node:crypto';
 import { DbService, AuthRequest } from './db.service';
 
 @ApiTags('catalog')
@@ -19,7 +20,7 @@ export class CoreController {
       return{tableId:table.rows[0].id,tableLabel:table.rows[0].label,maxOrderLines:settings.rows[0]?.maxOrderLines??20,products:products.rows};
     });
   }
-  @Post('public/orders/:token') async qrOrder(@Param('token') token:string,@Body() b:{name:string;email?:string;items:{productId:string;quantity:number}[]}) {
+  @Post('public/orders/:token') async qrOrder(@Param('token') token:string,@Body() b:{name:string;email?:string;customerSessionToken?:string;items:{productId:string;quantity:number}[]},@Headers('x-customer-session-token') sessionToken?:string) {
     if(!b?.name?.trim()||!Array.isArray(b.items)||!b.items.length||b.items.some(i=>!i.productId||!Number.isFinite(i.quantity)||i.quantity<=0||i.quantity>100))throw new BadRequestException('Indica tu nombre y productos con cantidades válidas');
     const [tenantId,secret]=token.split('.');
     if(!tenantId||!secret)throw new BadRequestException('Código QR no válido');
@@ -35,12 +36,21 @@ export class CoreController {
       if(b.items.length>Number(settings.maxOrderLines))throw new BadRequestException(`El pedido no puede superar ${settings.maxOrderLines} líneas`);
       if(new Set(b.items.map(i=>i.productId)).size!==b.items.length)throw new BadRequestException('No repitas productos; ajusta su cantidad en una sola línea');
       if(Number(settings.cooldownSeconds)>0&&lastOrderAt&&Date.now()-new Date(lastOrderAt).getTime()<Number(settings.cooldownSeconds)*1000){
-        throw new TooManyRequestsException(`Espera ${settings.cooldownSeconds} segundos entre pedidos de esta mesa`);
+        throw new HttpException(`Espera ${settings.cooldownSeconds} segundos entre pedidos de esta mesa`, 429);
+      }
+      const customerToken=sessionToken||b.customerSessionToken;
+      let customer:any=null;
+      if(customerToken){
+        customer=(await c.query(`SELECT cs.customer_id "customerId",cu.full_name "fullName",cu.email,cu.preferences
+          FROM customer_sessions cs JOIN customers cu ON cu.tenant_id=cs.tenant_id AND cu.id=cs.customer_id
+          WHERE cs.tenant_id=$1 AND cs.token_hash=$2 AND cs.expires_at>now() AND cs.revoked_at IS NULL`,
+          [tenantId,createHash('sha256').update(customerToken).digest('hex')])).rows[0];
+        if(!customer)throw new UnauthorizedException('La sesión de cliente ha caducado; inicia sesión de nuevo');
       }
       const status=settings.approvalRequired?'pending_approval':'sent';
-      const order=await c.query(`INSERT INTO orders(tenant_id,opened_by,channel,table_id,table_label,customer_name,customer_email,status,qr_status_token)
-        VALUES($1,NULL,'qr',$2,$3,$4,$5,$6,encode(gen_random_bytes(24),'hex'))
-        RETURNING id,order_number "orderNumber",qr_status_token "statusToken"`,[tenantId,tableId,label,b.name.trim(),b.email?.trim()||null,status]);
+      const order=await c.query(`INSERT INTO orders(tenant_id,opened_by,channel,table_id,table_label,customer_name,customer_email,customer_id,customer_preferences,status,qr_status_token)
+        VALUES($1,NULL,'qr',$2,$3,$4,$5,$6,$7,$8,encode(gen_random_bytes(24),'hex'))
+        RETURNING id,order_number "orderNumber",qr_status_token "statusToken"`,[tenantId,tableId,label,customer?.fullName||b.name.trim(),customer?.email||b.email?.trim()||null,customer?.customerId||null,customer?.preferences||null,status]);
       let net=0,vat=0;
       for(const item of b.items){
         const product=await c.query('SELECT id,name,price_net,vat_rate FROM products WHERE tenant_id=$1 AND id=$2 AND active',[tenantId,item.productId]);
