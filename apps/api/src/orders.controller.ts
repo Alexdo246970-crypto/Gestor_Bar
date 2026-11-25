@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, Param, Post, Req, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Param, Post, Req, UnauthorizedException } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { DbService, AuthRequest } from './db.service';
 
@@ -14,7 +14,7 @@ export class OrdersController {
   }
   /** Abre una comanda. Con `tableId` la vincula a la mesa; si la mesa ya tiene una comanda activa, devuelve esa misma. */
   @Post() async create(@Req() req: AuthRequest, @Body() b: { channel?: string; tableLabel?: string; tableId?: string }) {
-    const s = this.role(req, ['admin','manager','waiter','cashier']);
+    const s = this.role(req, ['admin','manager','waiter','temporary_waiter']);
     if (b?.channel && !['table','counter','delivery'].includes(b.channel)) throw new BadRequestException('Canal no válido');
     return this.db.tenant(req, async c => {
       if (b?.tableId) {
@@ -32,10 +32,10 @@ export class OrdersController {
       return { ...r.rows[0], reused: false };
     });
   }
-  @Get('active') async active(@Req() req:AuthRequest){const s=this.role(req,['admin','manager','waiter','cashier']);return this.db.tenant(req,async c=>(await c.query(`SELECT o.id,o.order_number "orderNumber",o.status,o.channel,o.table_id "tableId",o.table_label "tableLabel",o.opened_at "openedAt",o.gross_total "grossTotal",count(l.id)::int "lineCount",(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.tenant_id=o.tenant_id AND p.order_id=o.id) "paidTotal" FROM orders o LEFT JOIN order_lines l ON l.tenant_id=o.tenant_id AND l.order_id=o.id WHERE o.tenant_id=$1 AND o.status IN ('open','sent') GROUP BY o.id ORDER BY o.opened_at`,[s.tenantId])).rows);}
-  @Get(':id') async detail(@Req() req:AuthRequest,@Param('id') id:string){const s=this.role(req,['admin','manager','waiter','cashier']);return this.db.tenant(req,async c=>{const order=await c.query(`SELECT id,order_number "orderNumber",status,channel,table_id "tableId",table_label "tableLabel",opened_at "openedAt",gross_total "grossTotal",(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.tenant_id=orders.tenant_id AND p.order_id=orders.id) "paidTotal" FROM orders WHERE tenant_id=$1 AND id=$2`,[s.tenantId,id]);if(!order.rows[0])throw new BadRequestException('Pedido no encontrado');const lines=await c.query(`SELECT id,product_id "productId",product_name "productName",quantity,line_gross "lineGross" FROM order_lines WHERE tenant_id=$1 AND order_id=$2 ORDER BY id`,[s.tenantId,id]);const payments=await c.query(`SELECT id,method,amount,cash_tendered "cashTendered",change_given "changeGiven",card_reference "cardReference",paid_at "paidAt" FROM payments WHERE tenant_id=$1 AND order_id=$2 ORDER BY paid_at`,[s.tenantId,id]);return{...order.rows[0],lines:lines.rows,payments:payments.rows};});}
-  @Post(':id/lines') async addLines(@Req() req: AuthRequest, @Param('id') id: string, @Body() b: { productId: string; quantity: number; removeIngredientIds?: string[]; addedIngredients?: {ingredientId:string;quantity:number}[] }) {
-    const s = this.role(req, ['admin','manager','waiter']);
+  @Get('active') async active(@Req() req:AuthRequest){const s=this.role(req,['admin','owner','manager','waiter','temporary_waiter','cashier']);return this.db.tenant(req,async c=>(await c.query(`SELECT o.id,o.order_number "orderNumber",o.status,o.channel,o.table_id "tableId",o.table_label "tableLabel",o.opened_at "openedAt",o.gross_total "grossTotal",count(l.id) FILTER(WHERE l.cancelled_at IS NULL)::int "lineCount",(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.tenant_id=o.tenant_id AND p.order_id=o.id) "paidTotal" FROM orders o LEFT JOIN order_lines l ON l.tenant_id=o.tenant_id AND l.order_id=o.id WHERE o.tenant_id=$1 AND o.status IN ('open','sent') GROUP BY o.id ORDER BY o.opened_at`,[s.tenantId])).rows);}
+  @Get(':id') async detail(@Req() req:AuthRequest,@Param('id') id:string){const s=this.role(req,['admin','owner','manager','waiter','temporary_waiter','cashier']);return this.db.tenant(req,async c=>{const order=await c.query(`SELECT id,order_number "orderNumber",status,channel,table_id "tableId",table_label "tableLabel",opened_at "openedAt",gross_total "grossTotal",(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.tenant_id=orders.tenant_id AND p.order_id=orders.id) "paidTotal" FROM orders WHERE tenant_id=$1 AND id=$2`,[s.tenantId,id]);if(!order.rows[0])throw new BadRequestException('Pedido no encontrado');const lines=await c.query(`SELECT l.id,l.product_id "productId",l.product_name "productName",l.quantity,l.line_gross "lineGross",l.cancelled_at "cancelledAt",l.cancellation_reason "cancellationReason",u.full_name "addedBy" FROM order_lines l LEFT JOIN users u ON u.id=l.created_by WHERE l.tenant_id=$1 AND l.order_id=$2 ORDER BY l.created_at,l.id`,[s.tenantId,id]);const payments=await c.query(`SELECT id,method,amount,cash_tendered "cashTendered",change_given "changeGiven",card_reference "cardReference",paid_at "paidAt" FROM payments WHERE tenant_id=$1 AND order_id=$2 ORDER BY paid_at`,[s.tenantId,id]);return{...order.rows[0],lines:lines.rows,payments:payments.rows};});}
+  @Post(':id/lines') async addLines(@Req() req: AuthRequest, @Param('id') id: string, @Body() b: { productId: string; quantity: number; unitPriceGross?: number; priceAdjustmentReason?: string; removeIngredientIds?: string[]; addedIngredients?: {ingredientId:string;quantity:number}[] }) {
+    const s = this.role(req, ['admin','manager','waiter','temporary_waiter']);
     if (!b?.productId || !Number.isFinite(b.quantity) || b.quantity <= 0) throw new BadRequestException('Producto y cantidad positiva requeridos');
     return this.db.tenant(req, async c => {
       const order = await c.query('SELECT status FROM orders WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [s.tenantId,id]);
@@ -49,9 +49,16 @@ export class OrdersController {
         if(!allowed.rows[0]) throw new BadRequestException('Ese ingrediente extra no está permitido para este plato');
         const unitPriceNet=Number(allowed.rows[0].extra_price_net);extraUnitNet+=unitPriceNet;added.push({...extra,unitPriceNet});
       }
-      const unitNet=Number(x.price_net)+extraUnitNet,net=unitNet*b.quantity,vat=net*Number(x.vat_rate)/100;
-      const line = await c.query(`INSERT INTO order_lines(tenant_id,order_id,product_id,product_name,quantity,unit_net,vat_rate,line_net,line_vat,line_gross)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,[s.tenantId,id,x.id,x.name,b.quantity,unitNet,x.vat_rate,net.toFixed(2),vat.toFixed(2),(net+vat).toFixed(2)]);
+      let unitNet=Number(x.price_net)+extraUnitNet;
+      if (b.unitPriceGross !== undefined) {
+        if (!['admin','manager'].includes(s.role)) throw new ForbiddenException('Solo administración puede ajustar precios');
+        if (!Number.isFinite(b.unitPriceGross) || b.unitPriceGross < 0) throw new BadRequestException('Precio ajustado no válido');
+        if (!String(b.priceAdjustmentReason||'').trim()) throw new BadRequestException('Indica el motivo del ajuste de precio');
+        unitNet = Math.round((b.unitPriceGross / (1 + Number(x.vat_rate) / 100)) * 100) / 100;
+      }
+      const net=unitNet*b.quantity,vat=net*Number(x.vat_rate)/100;
+      const line = await c.query(`INSERT INTO order_lines(tenant_id,order_id,product_id,product_name,quantity,unit_net,vat_rate,line_net,line_vat,line_gross,created_by)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,[s.tenantId,id,x.id,x.name,b.quantity,unitNet,x.vat_rate,net.toFixed(2),vat.toFixed(2),(net+vat).toFixed(2),s.userId]);
       const lineId=line.rows[0].id;
       for(const ingredientId of [...new Set(b.removeIngredientIds||[])]) {
         const base=await c.query('SELECT quantity FROM recipes WHERE tenant_id=$1 AND product_id=$2 AND ingredient_id=$3',[s.tenantId,x.id,ingredientId]);
@@ -61,17 +68,38 @@ export class OrdersController {
       for(const extra of added) {
         await c.query("INSERT INTO order_line_modifications(tenant_id,order_line_id,ingredient_id,action,quantity_per_unit,unit_price_net) VALUES($1,$2,$3,'add',$4,$5)",[s.tenantId,lineId,extra.ingredientId,extra.quantity,extra.unitPriceNet]);
       }
-      await c.query(`UPDATE orders SET net_total=(SELECT coalesce(sum(line_net),0) FROM order_lines WHERE tenant_id=$1 AND order_id=$2),
-        vat_total=(SELECT coalesce(sum(line_vat),0) FROM order_lines WHERE tenant_id=$1 AND order_id=$2),
-        gross_total=(SELECT coalesce(sum(line_gross),0) FROM order_lines WHERE tenant_id=$1 AND order_id=$2) WHERE tenant_id=$1 AND id=$2`,[s.tenantId,id]);
+      await c.query(`UPDATE orders SET net_total=(SELECT coalesce(sum(line_net),0) FROM order_lines WHERE tenant_id=$1 AND order_id=$2 AND cancelled_at IS NULL),
+        vat_total=(SELECT coalesce(sum(line_vat),0) FROM order_lines WHERE tenant_id=$1 AND order_id=$2 AND cancelled_at IS NULL),
+        gross_total=(SELECT coalesce(sum(line_gross),0) FROM order_lines WHERE tenant_id=$1 AND order_id=$2 AND cancelled_at IS NULL) WHERE tenant_id=$1 AND id=$2`,[s.tenantId,id]);
+      await c.query("INSERT INTO audit_events(tenant_id,actor_id,event_type,target_id,details) VALUES($1,$2,'order.line_added',$3,$4::jsonb)",[s.tenantId,s.userId,lineId,JSON.stringify({orderId:id,productId:x.id,productName:x.name,quantity:b.quantity,unitGross:Number(((net+vat)/b.quantity).toFixed(2))})]);
+      if (b.unitPriceGross !== undefined) await c.query("INSERT INTO audit_events(tenant_id,actor_id,event_type,target_id,details) VALUES($1,$2,'order.price_adjusted',$3,$4::jsonb)",[s.tenantId,s.userId,lineId,JSON.stringify({orderId:id,productId:x.id,originalGross:Number((Number(x.price_net)*(1+Number(x.vat_rate)/100)).toFixed(2)),adjustedGross:b.unitPriceGross,reason:String(b.priceAdjustmentReason).trim()})]);
       return { ok:true };
     });
   }
+  @Delete(':id/lines/:lineId') async cancelLine(@Req() req: AuthRequest, @Param('id') id: string, @Param('lineId') lineId: string, @Body() b: { reason: string }) {
+    const s=this.role(req,['admin','manager','waiter','temporary_waiter']);
+    const reason=String(b?.reason||'').trim();
+    if (!reason||reason.length>240) throw new BadRequestException('Indica el motivo de anulación (máximo 240 caracteres)');
+    return this.db.tenant(req,async c=>{
+      const order=await c.query('SELECT status FROM orders WHERE tenant_id=$1 AND id=$2 FOR UPDATE',[s.tenantId,id]);
+      if(!order.rows[0]||!['open','sent'].includes(order.rows[0].status))throw new BadRequestException('Comanda inexistente o cerrada');
+      const paid=await c.query('SELECT coalesce(sum(amount),0) amount FROM payments WHERE tenant_id=$1 AND order_id=$2',[s.tenantId,id]);
+      if(Number(paid.rows[0].amount)>0)throw new BadRequestException('No se puede anular una línea después de iniciar el cobro');
+      const line=await c.query('UPDATE order_lines SET cancelled_at=now(),cancelled_by=$4,cancellation_reason=$5 WHERE tenant_id=$1 AND order_id=$2 AND id=$3 AND cancelled_at IS NULL RETURNING product_name,quantity,line_gross',[s.tenantId,id,lineId,s.userId,reason]);
+      if(!line.rowCount)throw new BadRequestException('La línea no existe o ya estaba anulada');
+      await c.query(`UPDATE orders SET net_total=(SELECT coalesce(sum(line_net),0) FROM order_lines WHERE tenant_id=$1 AND order_id=$2 AND cancelled_at IS NULL),
+        vat_total=(SELECT coalesce(sum(line_vat),0) FROM order_lines WHERE tenant_id=$1 AND order_id=$2 AND cancelled_at IS NULL),
+        gross_total=(SELECT coalesce(sum(line_gross),0) FROM order_lines WHERE tenant_id=$1 AND order_id=$2 AND cancelled_at IS NULL) WHERE tenant_id=$1 AND id=$2`,[s.tenantId,id]);
+      await c.query("INSERT INTO audit_events(tenant_id,actor_id,event_type,target_id,details) VALUES($1,$2,'order.line_cancelled',$3,$4::jsonb)",[s.tenantId,s.userId,lineId,JSON.stringify({orderId:id,productName:line.rows[0].product_name,quantity:line.rows[0].quantity,reason})]);
+      return {ok:true};
+    });
+  }
   @Post(':id/send') async send(@Req() req: AuthRequest, @Param('id') id: string) {
-    const s=this.role(req,['admin','manager','waiter']);
+    const s=this.role(req,['admin','manager','waiter','temporary_waiter']);
     return this.db.tenant(req,async c=>{
       const r=await c.query("UPDATE orders SET status='sent' WHERE tenant_id=$1 AND id=$2 AND status IN ('open','sent') RETURNING id",[s.tenantId,id]);
       if (!r.rowCount) throw new BadRequestException('El pedido no existe o ya fue enviado');
+      await c.query("INSERT INTO audit_events(tenant_id,actor_id,event_type,target_id,details) VALUES($1,$2,'order.sent',$3,'{}'::jsonb)",[s.tenantId,s.userId,id]);
       return {ok:true,orderId:id};
     });
   }
@@ -95,6 +123,7 @@ export class OrdersController {
       if (Number(paid.rows[0].amount)+amount>Number(o.rows[0].gross_total)+0.001) throw new BadRequestException('El pago supera el total pendiente');
       await c.query('INSERT INTO payments(tenant_id,order_id,method,amount,cash_tendered,change_given,card_reference,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
         [s.tenantId,id,b.method,amount,tendered,change,b.method==='card'?(b.cardReference?.trim()||null):null,s.userId]);
+      await c.query("INSERT INTO audit_events(tenant_id,actor_id,event_type,target_id,details) VALUES($1,$2,'payment.recorded',$3,$4::jsonb)",[s.tenantId,s.userId,id,JSON.stringify({method:b.method,amount})]);
       const total=Number(paid.rows[0].amount)+amount,closed=total+0.001>=Number(o.rows[0].gross_total);
       if(closed) await this.finalize(c,s.tenantId,id,s.userId);
       return {paid:total,remaining:Math.max(0,Math.round((Number(o.rows[0].gross_total)-total)*100)/100),closed,change};
@@ -117,11 +146,11 @@ export class OrdersController {
         SELECT r.ingredient_id, sum(greatest(r.quantity-coalesce(m.quantity_per_unit,0),0)*l.quantity) quantity
         FROM order_lines l JOIN recipes r ON r.tenant_id=l.tenant_id AND r.product_id=l.product_id
         LEFT JOIN order_line_modifications m ON m.tenant_id=l.tenant_id AND m.order_line_id=l.id AND m.ingredient_id=r.ingredient_id AND m.action='remove'
-        WHERE l.tenant_id=$1 AND l.order_id=$2 GROUP BY r.ingredient_id
+        WHERE l.tenant_id=$1 AND l.order_id=$2 AND l.cancelled_at IS NULL GROUP BY r.ingredient_id
       ), additions AS (
         SELECT m.ingredient_id,sum(m.quantity_per_unit*l.quantity) quantity
         FROM order_lines l JOIN order_line_modifications m ON m.tenant_id=l.tenant_id AND m.order_line_id=l.id AND m.action='add'
-        WHERE l.tenant_id=$1 AND l.order_id=$2 GROUP BY m.ingredient_id
+        WHERE l.tenant_id=$1 AND l.order_id=$2 AND l.cancelled_at IS NULL GROUP BY m.ingredient_id
       ), totals AS (SELECT ingredient_id,sum(quantity) quantity FROM (SELECT * FROM base UNION ALL SELECT * FROM additions) stock
         WHERE quantity>0 GROUP BY ingredient_id)
       SELECT totals.ingredient_id,totals.quantity,ingredients.current_unit_cost unit_cost FROM totals JOIN ingredients

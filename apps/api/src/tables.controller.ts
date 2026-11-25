@@ -43,7 +43,7 @@ export function joinedLabel(first: string, second: string) {
 @Controller('tables')
 export class TablesController {
   constructor(private readonly db: DbService) {}
-  private session(req: AuthRequest, roles = ['admin', 'manager', 'waiter', 'cashier']) {
+  private session(req: AuthRequest, roles = ['admin', 'owner', 'manager', 'waiter', 'temporary_waiter', 'cashier']) {
     const s = req.session?.app;
     if (!s) throw new UnauthorizedException();
     if (!roles.includes(s.role)) throw new ForbiddenException('Permiso insuficiente');
