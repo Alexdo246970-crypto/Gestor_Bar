@@ -13,14 +13,15 @@ export class AuthController {
       const tenant = await client.query('SELECT id FROM tenants WHERE slug=$1 AND active', [body.tenant]);
       if (!tenant.rows[0]) return null;
       await client.query("SELECT set_config('app.tenant_id',$1,true)", [tenant.rows[0].id]);
-      const found = await client.query(`SELECT u.id user_id,u.email,u.full_name,t.id tenant_id,t.name tenant_name,tu.role,u.password_hash
+      const found = await client.query(`SELECT u.id user_id,u.email,u.full_name,t.id tenant_id,t.name tenant_name,tu.role,u.password_hash,u.expires_at
         FROM tenants t JOIN tenant_users tu ON tu.tenant_id=t.id JOIN users u ON u.id=tu.user_id
-        WHERE t.id=$1 AND lower(u.email)=lower($2) AND t.active AND u.active AND tu.active`, [tenant.rows[0].id, body.email]);
+        WHERE t.id=$1 AND lower(u.email)=lower($2) AND t.active AND u.active AND tu.active AND (u.expires_at IS NULL OR u.expires_at>now())`, [tenant.rows[0].id, body.email]);
       return found.rows[0] || null;
     });
     if (!row || !(await argon2.verify(row.password_hash, body.password))) throw new UnauthorizedException('Credenciales incorrectas');
     await new Promise<void>((resolve, reject) => req.session.regenerate(error => error ? reject(error) : resolve()));
     req.session.app = { userId: row.user_id, tenantId: row.tenant_id, tenantName: row.tenant_name, role: row.role };
+    if(row.expires_at) req.session.cookie.maxAge=Math.max(0,Math.min(12*60*60*1000,new Date(row.expires_at).getTime()-Date.now()));
     await new Promise<void>((resolve, reject) => req.session.save(error => error ? reject(error) : resolve()));
     return { user: { id: row.user_id, email: row.email, fullName: row.full_name, tenantId: row.tenant_id, tenantName: row.tenant_name, role: row.role } };
   }

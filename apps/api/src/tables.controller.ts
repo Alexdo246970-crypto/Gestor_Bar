@@ -32,7 +32,7 @@ export class TablesController {
   @Get() async list(@Req() req: AuthRequest) {
     const s = this.session(req);
     return this.db.tenant(req, async c => (await c.query(`
-      SELECT t.id,t.label,t.zone,t.seats,t.shape,t.pos_x "posX",t.pos_y "posY",
+      SELECT t.id,t.label,t.zone,t.seats,t.shape,t.pos_x "posX",t.pos_y "posY",(t.tenant_id::text||'.'||t.qr_token) "qrToken",
         CASE WHEN o.id IS NULL THEN NULL ELSE json_build_object('id',o.id,'orderNumber',o.order_number,'status',o.status,
           'openedAt',o.opened_at,'grossTotal',o.gross_total,
           'paidTotal',(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.tenant_id=o.tenant_id AND p.order_id=o.id),
