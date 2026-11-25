@@ -7,11 +7,11 @@ type Editing = { mode: 'new' } | { mode: 'edit'; product: AdminProduct };
 
 /** Gestión de la carta: añadir, editar, retirar y recuperar productos. */
 export function MenuAdmin({ onChanged }: { onChanged: () => void }) {
-  const [products, setProducts] = useState<AdminProduct[]>([]), [categories, setCategories] = useState<Category[]>([]), [search, setSearch] = useState(''), [category, setCategory] = useState('Todas'), [showRemoved, setShowRemoved] = useState(false), [editing, setEditing] = useState<Editing | null>(null), [recipeProduct,setRecipeProduct]=useState<AdminProduct|null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [saving, setSaving] = useState(false), [newCategory, setNewCategory] = useState(false), [pvp, setPvp] = useState(''), [vat, setVat] = useState(10), [availableFrom,setAvailableFrom]=useState(''), [availableTo,setAvailableTo]=useState('');
+  const [products, setProducts] = useState<AdminProduct[]>([]), [categories, setCategories] = useState<Category[]>([]), [stockItems, setStockItems] = useState<any[]>([]), [search, setSearch] = useState(''), [category, setCategory] = useState('Todas'), [showRemoved, setShowRemoved] = useState(false), [editing, setEditing] = useState<Editing | null>(null), [recipeProduct,setRecipeProduct]=useState<AdminProduct|null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [saving, setSaving] = useState(false), [newCategory, setNewCategory] = useState(false), [pvp, setPvp] = useState(''), [vat, setVat] = useState(10), [availableFrom,setAvailableFrom]=useState(''), [availableTo,setAvailableTo]=useState('');
   const [menuView,setMenuView]=useState<'products'|'menus'>('products');
 
   async function load() {
-    try { const [p, c] = await Promise.all([request<AdminProduct[]>('/products/admin'), request<Category[]>('/categories')]); setProducts(p); setCategories(c); }
+    try { const [p, c, stock] = await Promise.all([request<AdminProduct[]>('/products/admin'), request<Category[]>('/categories'), request<any[]>('/inventory/ingredients')]); setProducts(p); setCategories(c); setStockItems(stock); }
     catch (e) { setError((e as Error).message); }
   }
   useEffect(() => { void load(); }, []);
@@ -35,7 +35,7 @@ export function MenuAdmin({ onChanged }: { onChanged: () => void }) {
       let categoryId = String(f.get('categoryId') || '') || null;
       if (newCategory) { const name = String(f.get('newCategory') || '').trim(); if (!name) throw new Error('Escribe el nombre de la nueva categoría'); categoryId = (await request<Category>('/categories', { method: 'POST', body: JSON.stringify({ name, sortOrder: categories.length }) })).id; }
       if (availableFrom && availableTo && availableFrom > availableTo) throw new Error('La fecha de fin debe ser posterior al inicio');
-      const payload = { name: String(f.get('name')).trim(), description: String(f.get('description') || '').trim() || null, categoryId, vatRate: vat, priceNet: Math.round(price / (1 + vat / 100) * 10000) / 10000, availableFrom: availableFrom || null, availableTo: availableTo || null };
+      const payload = { name: String(f.get('name')).trim(), description: String(f.get('description') || '').trim() || null, categoryId, vatRate: vat, priceNet: Math.round(price / (1 + vat / 100) * 10000) / 10000, availableFrom: availableFrom || null, availableTo: availableTo || null, kitchenStation:String(f.get('kitchenStation')||'kitchen'), stockItemId: String(f.get('stockItemId') || '') || null };
       if (editing.mode === 'new') await request('/products', { method: 'POST', body: JSON.stringify(payload) });
       else await request(`/products/${editing.product.id}`, { method: 'PATCH', body: JSON.stringify(payload) });
       setNotice(editing.mode === 'new' ? `«${payload.name}» añadido a la carta.` : `«${payload.name}» actualizado.`);
@@ -80,6 +80,9 @@ export function MenuAdmin({ onChanged }: { onChanged: () => void }) {
         <h3>{editing.mode === 'new' ? 'Añadir a la carta' : editing.product.name}</h3>
         <label>Nombre<input name="name" required autoFocus defaultValue={editing.mode === 'edit' ? editing.product.name : ''} placeholder="Ej. Calamares a la romana" /></label>
         <label>Descripción (opcional)<input name="description" defaultValue={editing.mode === 'edit' ? editing.product.description || '' : ''} /></label>
+        <label>Partida<select name="kitchenStation" defaultValue={editing.mode === 'edit' ? (editing.product as any).kitchenStation || 'kitchen' : 'kitchen'}><option value="kitchen">Cocina</option><option value="bar">Barra</option></select></label>
+        <label>Artículo de stock para reventa (opcional)<select name="stockItemId" defaultValue={editing.mode === 'edit' ? (editing.product as any).stockItemId || '' : ''}><option value="">No es artículo de reventa</option>{stockItems.map(i=><option key={i.id} value={i.id}>{i.name} · {i.currentStock} {i.unit} disponibles</option>)}</select></label>
+        <p className="modal-description">Al cobrar este producto se descontará una unidad del artículo de stock seleccionado. Los platos con receta se gestionan por sus ingredientes.</p>
         <label>Categoría{!newCategory
           ? <select name="categoryId" defaultValue={editing.mode === 'edit' ? editing.product.categoryId || '' : categories[0]?.id || ''}><option value="">Sin categoría</option>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
           : <input name="newCategory" placeholder="Nombre de la nueva categoría" autoFocus />}</label>

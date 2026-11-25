@@ -16,9 +16,14 @@ const minutesSince = (iso: string) => Math.max(0, Math.round((Date.now() - new D
 /** Plano de sala: cada mesa muestra en tiempo real el estado de su comanda. */
 export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenInPos: (table: { id: string; label: string }) => void }) {
   const [tables, setTables] = useState<DiningTable[]>([]), [zone, setZone] = useState(''), [selectedId, setSelectedId] = useState<string | null>(null), [detail, setDetail] = useState<OrderDetail | null>(null), [editMode, setEditMode] = useState(false), [paying, setPaying] = useState<string | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [draft, setDraft] = useState<{ posX: number; posY: number } | null>(null), [dragId, setDragId] = useState<string | null>(null), [pendingZone, setPendingZone] = useState<string | null>(null);
+  const [qrSettings,setQrSettings]=useState({approvalRequired:false,maxOrderLines:20,cooldownSeconds:120}),[showQrSettings,setShowQrSettings]=useState(false);
 
   async function load() { try { setTables(await request<DiningTable[]>('/tables')); } catch (e) { setError((e as Error).message); } }
   useEffect(() => { void load(); const timer = setInterval(() => void load(), 15000); return () => clearInterval(timer); }, []);
+  useEffect(() => { if(canEdit) request<typeof qrSettings>('/tables/qr-settings').then(setQrSettings).catch(e=>setError((e as Error).message)); }, [canEdit]);
+
+  async function saveQrSettings(e:FormEvent<HTMLFormElement>){e.preventDefault();const data=new FormData(e.currentTarget),next={approvalRequired:data.get('approvalRequired')==='on',maxOrderLines:Number(data.get('maxOrderLines')),cooldownSeconds:Number(data.get('cooldownSeconds'))};try{setQrSettings(await request('/tables/qr-settings',{method:'PATCH',body:JSON.stringify(next)}));setShowQrSettings(false);setNotice('Ajustes de pedidos QR guardados.')}catch(err){setError((err as Error).message)}}
+  async function rotateQrToken(){if(!selected||!confirm(`El QR anterior de ${selected.label} dejará de funcionar. ¿Regenerarlo?`))return;try{const updated=await request<{qrToken:string}>(`/tables/${selected.id}/qr-token`,{method:'POST'});setTables(current=>current.map(t=>t.id===selected.id?{...t,qrToken:updated.qrToken}:t));setNotice(`QR de ${selected.label} regenerado; el enlace anterior ya no sirve.`)}catch(err){setError((err as Error).message)}}
 
   const zones = useMemo(() => { const list = [...new Set(tables.map(t => t.zone))]; if (pendingZone && !list.includes(pendingZone)) list.push(pendingZone); return list.length ? list : ['Salón']; }, [tables, pendingZone]);
   const currentZone = zones.includes(zone) ? zone : zones[0];
@@ -66,9 +71,10 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
 
   return <section className="tables-page">
     <div className="section-head"><div><h3>Mapa de mesas</h3><p>Toca una mesa para abrir su comanda, añadir productos o cobrar</p></div>
-      <div className="tables-head-actions"><button className="secondary" onClick={() => void load()}>Actualizar ↻</button>{canEdit && <button className={editMode ? 'primary' : 'secondary'} onClick={() => { setEditMode(!editMode); setDraft(null); }}>{editMode ? 'Terminar edición' : '✎ Editar plano'}</button>}</div></div>
+      <div className="tables-head-actions"><button className="secondary" onClick={() => void load()}>Actualizar ↻</button>{canEdit && <><button className="secondary" onClick={()=>setShowQrSettings(v=>!v)}>Ajustes QR</button><button className={editMode ? 'primary' : 'secondary'} onClick={() => { setEditMode(!editMode); setDraft(null); }}>{editMode ? 'Terminar edición' : '✎ Editar plano'}</button></>}</div></div>
     {error && <div className="toast" onClick={() => setError('')}>{error} ×</div>}
     {notice && <div className="order-notice" onClick={() => setNotice('')}>✓ {notice}</div>}
+    {showQrSettings&&canEdit&&<form className="table-form qr-settings-form" onSubmit={saveQrSettings}><p className="eyebrow">PEDIDOS QR</p><h3>Control de pedidos</h3><label className="checkbox-row"><input type="checkbox" name="approvalRequired" defaultChecked={qrSettings.approvalRequired}/> Requerir aprobación del personal antes de enviar a cocina</label><div className="form-pair"><label>Máximo de líneas (1–20)<input name="maxOrderLines" type="number" min="1" max="20" defaultValue={qrSettings.maxOrderLines} required/></label><label>Espera entre pedidos (segundos)<input name="cooldownSeconds" type="number" min="0" max="3600" defaultValue={qrSettings.cooldownSeconds} required/></label></div><div className="modal-actions"><button type="button" className="secondary" onClick={()=>setShowQrSettings(false)}>Cancelar</button><button className="primary">Guardar ajustes</button></div></form>}
     <div className="table-stats">
       <article><span>Mesas libres</span><strong>{tables.length - busy.length}</strong><small>de {tables.length}</small></article>
       <article><span>Ocupadas</span><strong>{busy.length}</strong><small>con comanda abierta</small></article>
@@ -114,6 +120,7 @@ export function TablesView({ canEdit, onOpenInPos }: { canEdit: boolean; onOpenI
         : <div className="table-detail">
           <p className="eyebrow">{selected.zone.toUpperCase()} · {selected.seats} PLAZAS</p>
           <h3>{selected.label}</h3>
+          {canEdit&&selected.qrToken&&<><button className="secondary wide-secondary" onClick={()=>{const url=`${window.location.origin}/?qr=${encodeURIComponent(selected.qrToken!)}`;void navigator.clipboard.writeText(url).then(()=>setNotice(`Enlace QR de ${selected.label} copiado.`)).catch(()=>setError(`Enlace QR: ${url}`))}}>Copiar enlace de pedido QR</button><button className="text-button wide-secondary" onClick={()=>void rotateQrToken()}>Regenerar QR</button></>}
           <span className={`state-pill ${tableState(selected)}`}>{STATE_LABEL[tableState(selected)]}</span>
           {!selected.activeOrder ? <>
             <p className="modal-description">Mesa libre. Abre una comanda y añade los productos desde la carta.</p>

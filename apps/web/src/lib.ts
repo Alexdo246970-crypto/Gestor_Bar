@@ -5,8 +5,8 @@ export const API = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
 export const DEMO = import.meta.env.VITE_DEMO_MODE === 'true';
 
 export type DiningTable = {
-  id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar'; posX: number; posY: number;
-  activeOrder: null | { id: string; orderNumber: number; status: 'open' | 'sent'; openedAt: string; grossTotal: number; paidTotal: number; lineCount: number };
+  id: string; label: string; zone: string; seats: number; shape: 'square' | 'round' | 'bar'; posX: number; posY: number; qrToken?: string;
+  activeOrder: null | { id: string; orderNumber: number; status: 'open' | 'pending_approval' | 'sent'; openedAt: string; grossTotal: number; paidTotal: number; lineCount: number };
 };
 export type OrderDetail = {
   id: string; orderNumber: number; status: string; channel: string; tableId: string | null; tableLabel: string | null; openedAt: string;

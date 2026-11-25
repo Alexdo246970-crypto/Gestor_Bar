@@ -21,6 +21,8 @@ Modo demostración sin base de datos (datos en memoria del navegador): `VITE_DEM
 
 Crear el primer local y administrador mediante `POST /api/setup` (solo disponible mientras no exista ningún usuario; deshabilitar/eliminar este endpoint antes de exponer el servicio públicamente). El endpoint devuelve las credenciales iniciales una sola vez y exige una contraseña fuerte.
 
+Las cuentas opcionales de cliente usan enlaces de acceso de un solo uso. Para enviarlos, configura `RESEND_API_KEY`, `EMAIL_FROM` y `PUBLIC_APP_URL` en el entorno de la API; las preferencias del cliente se muestran en cocina para avisar sobre alergias o ingredientes que quiere evitar. El cliente puede consultar el historial de los últimos 12 meses, descargar sus datos o borrar su cuenta.
+
 ## Estructura
 
 ```text
@@ -34,7 +36,7 @@ database/           Migración PostgreSQL, RLS e índices
 
 - El login identifica el local por `slug`, email y contraseña. Las sesiones se guardan en PostgreSQL y se transportan en cookie `HttpOnly`, `Secure` en producción y `SameSite=Lax`.
 - El tenant se resuelve desde la sesión, nunca desde el cuerpo de una petición. La API establece `app.tenant_id` localmente en la transacción; las tablas tenant-scoped aplican RLS y FKs compuestas.
-- Roles: `admin`, `manager`, `waiter`, `cashier`. Los permisos se aplican con guards de NestJS.
+- Roles: `admin`, `manager`, `waiter`, `cashier` y `kitchen`. Los permisos se aplican con guards de NestJS. Cocina solo accede a comandas y a los ajustes de su impresora; no ve precios, costes, márgenes ni datos de clientes.
 - El pedido descuenta stock una única vez al cerrarse/pagarse; la transacción registra movimientos de inventario. Una anulación crea reversos, no borra movimientos.
 - La contabilidad es un informe operativo, no un sistema de presentación fiscal. Confirmar tipos, fechas y tratamiento del IVA con asesoría contable.
 - Para producción: TLS, secretos administrados, rate limiting, copias de seguridad, auditoría, política de retención, monitoreo y revisión de seguridad. Desactivar `/setup` una vez creado el primer administrador.
