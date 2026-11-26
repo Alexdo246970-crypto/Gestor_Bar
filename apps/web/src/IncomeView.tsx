@@ -17,7 +17,6 @@ export function IncomeView({ canEdit }: { canEdit: boolean }) {
   const [amortizations, setAmortizations] = useState<Amortization[]>([]), [showAmortization, setShowAmortization] = useState(false), [notice, setNotice] = useState('');
 
   async function loadAmortizations() {
-    if (DEMO) return;
     try { setAmortizations(await request<Amortization[]>('/reports/amortizations')); }
     catch (e) { setError((e as Error).message); }
   }
@@ -37,7 +36,6 @@ export function IncomeView({ canEdit }: { canEdit: boolean }) {
   }
 
   async function load() {
-    if (DEMO) { setData(null); return; }
     try { setData(await request<Result>(`/reports/income-statement?from=${from}&to=${to}`)); }
     catch (e) { setError((e as Error).message); }
   }
@@ -46,14 +44,14 @@ export function IncomeView({ canEdit }: { canEdit: boolean }) {
 
   return <section className="finance-page">
     <div className="section-head"><div><h3>Estado de resultados</h3><p>Beneficio reproducible, con fórmula y detalle por línea</p></div>
-      <div className="tables-head-actions">{canEdit && !DEMO && <button className="secondary" onClick={() => setShowAmortization(true)}>＋ Amortización</button>}
+      <div className="tables-head-actions">{canEdit && <button className="secondary" onClick={() => setShowAmortization(true)}>＋ Amortización</button>}
         <a className="secondary button-link" href={`${DEMO ? '#' : `/api/reports/income-statement.csv?from=${from}&to=${to}`}`} download>↓ Exportar CSV</a></div></div>
     {error && <div className="toast" onClick={() => setError('')}>{error} ×</div>}
     {notice && <div className="order-notice" onClick={() => setNotice('')}>✓ {notice}</div>}
     <section className="amortization-panel"><div className="section-head"><div><h3>Amortizaciones</h3><p>Importe mensual manual, vigente en los meses del rango</p></div></div>
       <div className="ledger-lines">{amortizations.map(a => <div key={a.id} className="ledger-line"><span>{a.name}</span>
         <small>{euro(a.monthlyAmount)}/mes · {a.startMonth} – {a.endMonth || 'sin fin'}{!a.active ? ' · inactiva' : ''}</small>
-        {canEdit && !DEMO && a.active && <button className="remove-button" onClick={() => void removeAmortization(a.id)}>Dar de baja</button>}
+        {canEdit && a.active && <button className="remove-button" onClick={() => void removeAmortization(a.id)}>Dar de baja</button>}
       </div>)}{!amortizations.length && <p className="finance-note">Sin amortizaciones registradas.</p>}</div>
     </section>
     <div className="finance-period"><label>Desde<input type="date" value={from} onChange={e => setFrom(e.target.value)} /></label>

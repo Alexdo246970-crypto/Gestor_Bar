@@ -10,12 +10,11 @@ export function LedgerView({ canManage }: { canManage: boolean }) {
   const [data, setData] = useState<Result | null>(null), [categories, setCategories] = useState<string[]>([]), [error, setError] = useState('');
   const query = () => new URLSearchParams({ from, to, category, account }).toString();
   async function load() {
-    if (DEMO) { setData({ lines: [], totals: { incomeNet: 0, incomeVat: 0, incomeTotal: 0, expenseNet: 0, expenseVat: 0, expenseTotal: 0 }, byCategory: [], page: 1, pageSize: 100, total: 0 }); return; }
     try { setData(await request<Result>(`/ledger?${query()}`)); }
     catch (e) { setError((e as Error).message); }
   }
   useEffect(() => { void load(); }, [from, to, category, account]);
-  useEffect(() => { if (!DEMO) request<string[]>('/ledger/categories').then(setCategories).catch(e => setError((e as Error).message)); }, []);
+  useEffect(() => { request<string[]>('/ledger/categories').then(setCategories).catch(e => setError((e as Error).message)); }, []);
   async function create(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); const f = new FormData(e.currentTarget);
     try {
@@ -29,7 +28,7 @@ export function LedgerView({ canManage }: { canManage: boolean }) {
   const totals = data?.totals;
   return <section className="finance-page">
     <div className="section-head"><div><h3>Cuentas</h3><p>Libro de movimientos: entradas, salidas y saldo del periodo</p></div>
-      {!DEMO && <a className={`secondary button-link ${DEMO ? 'disabled' : ''}`} href={`${API}/ledger/csv?${query()}`} download>↓ CSV</a>}</div>
+      <a className={`secondary button-link ${DEMO ? 'disabled' : ''}`} href={`${API}/ledger/csv?${query()}`} download>↓ CSV</a></div>
     {error && <div className="toast" onClick={() => setError('')}>{error} ×</div>}
     <div className="finance-period"><label>Desde<input type="date" value={from} onChange={e => setFrom(e.target.value)} /></label>
       <label>Hasta<input type="date" value={to} onChange={e => setTo(e.target.value)} /></label>
@@ -52,7 +51,7 @@ export function LedgerView({ canManage }: { canManage: boolean }) {
       <aside><div className="section-head"><div><h3>Por categoría</h3><p>Totales del periodo</p></div></div>
         <div className="ledger-lines">{data?.byCategory.map(c => <div key={`${c.type}-${c.category}`} className="ledger-line"><span>{c.type === 'income' ? '↑' : '↓'}</span><strong>{c.category}</strong><b className={c.type}>{euro(c.total)}</b></div>)}
           {!data?.byCategory.length && <p className="finance-note">Sin categorías en este periodo.</p>}</div>
-        {canManage && !DEMO && <><div className="section-head"><div><h3>Nuevo apunte</h3><p>Ingreso o gasto manual</p></div></div>
+        {canManage && <><div className="section-head"><div><h3>Nuevo apunte</h3><p>Ingreso o gasto manual</p></div></div>
         <form onSubmit={create} className="table-form">
           <label>Fecha<input name="date" type="date" required /></label>
           <label>Tipo<select name="type"><option value="expense">Gasto</option><option value="income">Ingreso</option></select></label>

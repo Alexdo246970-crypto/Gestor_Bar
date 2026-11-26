@@ -21,7 +21,6 @@ export function PurchasesView({ canManage }: { canManage: boolean }) {
   const [draftLines, setDraftLines] = useState<DraftLine[]>([{ ingredientId: '', description: '', quantity: '1', unitPriceNet: '', vatRate: '21' }]);
 
   async function load() {
-    if (DEMO) { setRows([]); setTotals({ gross: 0, paid: 0, pending: 0 }); return; }
     try {
       const q = new URLSearchParams({ from, to, supplierId, status });
       const result = await request<{ lines: Purchase[]; totals: { gross: number; paid: number; pending: number } }>(`/purchases?${q}`);
@@ -30,13 +29,12 @@ export function PurchasesView({ canManage }: { canManage: boolean }) {
   }
   useEffect(() => { void load(); }, [from, to, supplierId, status]);
   useEffect(() => {
-    if (DEMO || !canManage) return;
+    if (!canManage) return;
     void request<Row[]>('/suppliers').then(setSuppliers).catch(() => {});
     void request<Row[]>('/inventory/ingredients').then(setIngredients).catch(() => {});
   }, [canManage]);
 
   async function open(id: string) {
-    if (DEMO) return;
     try { setDetail(await request<Detail>(`/purchases/${id}`)); } catch (e) { setError((e as Error).message); }
   }
   async function receive(id: string) {
@@ -70,7 +68,7 @@ export function PurchasesView({ canManage }: { canManage: boolean }) {
 
   return <section className="finance-page">
     <div className="section-head"><div><h3>Compras a proveedores</h3><p>Facturas, recepción, pago y gasto contable</p></div>
-      {canManage && !DEMO && <button className="primary" onClick={() => setShowForm(true)}>＋ Nueva factura</button>}</div>
+      {canManage && <button className="primary" onClick={() => setShowForm(true)}>＋ Nueva factura</button>}</div>
     {error && <div className="toast" onClick={() => setError('')}>{error} ×</div>}
     {notice && <div className="order-notice" onClick={() => setNotice('')}>✓ {notice}</div>}
     <div className="finance-period"><label>Desde<input type="date" value={from} onChange={e => setFrom(e.target.value)} /></label>
@@ -96,8 +94,8 @@ export function PurchasesView({ canManage }: { canManage: boolean }) {
         <div className="ledger-lines">{detail.lines.map(l => <div key={l.id} className="ledger-line"><span>{l.ingredientName || l.description}</span><small>{l.quantity} × {euro(l.unitPriceNet)} · IVA {l.vatRate}%</small><b>{euro(l.lineGross)}</b></div>)}</div>
         <p className="finance-note">Total {euro(detail.grossTotal)} · Pagado {euro(detail.paidAmount)} · Pendiente {euro(detail.pendingAmount)}</p>
         {!!detail.payments.length && <div className="ledger-lines">{detail.payments.map(p => <div key={p.id} className="ledger-line"><span>{p.paidAt.slice(0, 10)}</span><small>{p.account} · {p.method}</small><b>{euro(p.amount)}</b></div>)}</div>}
-        {canManage && !DEMO && detail.status === 'draft' && <button className="primary wide" onClick={() => void receive(detail.id)}>Recibir mercancía y contabilizar</button>}
-        {canManage && !DEMO && detail.status === 'received' && detail.pendingAmount > 0 && <button className="primary wide" onClick={() => void pay()}>Registrar pago</button>}
+        {canManage && detail.status === 'draft' && <button className="primary wide" onClick={() => void receive(detail.id)}>Recibir mercancía y contabilizar</button>}
+        {canManage && detail.status === 'received' && detail.pendingAmount > 0 && <button className="primary wide" onClick={() => void pay()}>Registrar pago</button>}
       </aside>}
     </div>
     {showForm && <div className="modal-backdrop"><form className="modal-card" onSubmit={create}>

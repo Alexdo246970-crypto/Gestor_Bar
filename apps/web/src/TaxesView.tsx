@@ -13,7 +13,6 @@ export function TaxesView({ canEdit }: { canEdit: boolean }) {
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [showOther, setShowOther] = useState(false);
 
   async function load() {
-    if (DEMO) { setSettings({ frequency: 'quarterly', vatRegime: 'general', dueDay: 20, thresholdPct: 3 }); setPeriods([]); setOthers([]); setAlerts({ periods: [], otherTaxes: [] }); return; }
     try {
       const [s, p, o, a] = await Promise.all([
         request<Settings>('/tax/settings'), request<Period[]>(`/tax/periods?year=${year}`),
@@ -57,24 +56,24 @@ export function TaxesView({ canEdit }: { canEdit: boolean }) {
         <label>Régimen<select name="vatRegime" defaultValue={settings.vatRegime} disabled={!canEdit}><option value="general">General</option><option value="simplified">Simplificado</option><option value="exempt">Exento</option></select></label>
         <div className="form-pair"><label>Día de vencimiento<input name="dueDay" type="number" min="1" max="28" defaultValue={settings.dueDay} disabled={!canEdit} /></label>
           <label>Umbral de aviso (%)<input name="thresholdPct" type="number" min="0" step="0.1" defaultValue={settings.thresholdPct} disabled={!canEdit} /></label></div>
-        {canEdit && !DEMO && <button className="primary wide">Guardar configuración</button>}
+        {canEdit && <button className="primary wide">Guardar configuración</button>}
       </form>}
     </section><section><div className="section-head"><div><h3>Otros impuestos</h3><p>IBI, tasas y impuestos propios</p></div>
-      {canEdit && !DEMO && <button className="secondary" onClick={() => setShowOther(true)}>＋ Añadir</button>}</div>
+      {canEdit && <button className="secondary" onClick={() => setShowOther(true)}>＋ Añadir</button>}</div>
       <div className="ledger-lines">{others.map(t => <div key={t.id} className="ledger-line"><span>{t.name}</span><small>{t.period || 'Sin periodo'} · {t.dueDate || 'sin vencimiento'}</small><b>{euro(t.amount)}</b>
-        {canEdit && !DEMO && !t.paid && <button className="secondary" onClick={() => void act(`/tax/other/${t.id}/pay`, {}, 'Pago contabilizado.')}>Pagar</button>}
+        {canEdit && !t.paid && <button className="secondary" onClick={() => void act(`/tax/other/${t.id}/pay`, {}, 'Pago contabilizado.')}>Pagar</button>}
         {t.paid && <small>pagado</small>}</div>)}{!others.length && <p className="finance-note">Sin otros impuestos registrados.</p>}</div>
     </section></div>
 
     <div className="section-head"><div><h3>Periodos de liquidación</h3><p>{periods.length} periodos para {year}</p></div>
       <div><input type="number" value={year} onChange={e => setYear(Number(e.target.value))} aria-label="Año" />
-        {canEdit && !DEMO && <button className="secondary" onClick={() => void act('/tax/periods/generate', { year }, 'Periodos generados y calculados.')}>Generar {year}</button>}</div></div>
+        {canEdit && <button className="secondary" onClick={() => void act('/tax/periods/generate', { year }, 'Periodos generados y calculados.')}>Generar {year}</button>}</div></div>
     <div className="ledger-lines">{periods.map(p => <div key={p.id} className="salary-line">
       <strong>{p.periodKey}</strong><span>{p.status === 'open' ? 'Abierto' : p.status === 'filed' ? 'Presentado' : 'Pagado'}</span>
       <small>Repercutido {euro(p.outputVat)}</small><small>Soportado {euro(p.inputVat)}</small><b>{euro(p.result)}</b>
       <button className="text-button" onClick={() => void open(p.id)}>Ver facturas</button>
-      {canEdit && !DEMO && p.status === 'open' && <button className="secondary" onClick={() => void act(`/tax/periods/${p.id}/close`, {}, 'Periodo presentado; gasto registrado si hay saldo.')}>Cerrar</button>}
-      {canEdit && !DEMO && p.status === 'filed' && <button className="secondary" onClick={() => void act(`/tax/periods/${p.id}/pay`, {}, 'Pago registrado.')}>Marcar pagado</button>}
+      {canEdit && p.status === 'open' && <button className="secondary" onClick={() => void act(`/tax/periods/${p.id}/close`, {}, 'Periodo presentado; gasto registrado si hay saldo.')}>Cerrar</button>}
+      {canEdit && p.status === 'filed' && <button className="secondary" onClick={() => void act(`/tax/periods/${p.id}/pay`, {}, 'Pago registrado.')}>Marcar pagado</button>}
     </div>)}{!periods.length && <p className="finance-note">Genera los periodos del año para ver el cálculo.</p>}</div>
 
     {detail && <div className="modal-backdrop"><div className="modal-card"><div className="section-head"><div><h3>{detail.periodKey}</h3><p>{detail.startDate} – {detail.endDate} · vencimiento {detail.dueDate}</p></div><button className="secondary" onClick={() => setDetail(null)}>×</button></div>

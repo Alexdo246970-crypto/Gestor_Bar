@@ -11,7 +11,6 @@ export function SalariesView({ canManage }: { canManage: boolean }) {
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [showEmployee, setShowEmployee] = useState(false), [showSalary, setShowSalary] = useState(false);
 
   async function load() {
-    if (DEMO) { setEmployees([]); setData({ lines: canManage ? [] : undefined, totals: { gross: 0, net: 0, socialSecurityCompany: 0, cost: 0 } }); return; }
     try {
       const payroll = await request<Result>(`/salaries?month=${month}`);
       setData(payroll);
@@ -43,7 +42,7 @@ export function SalariesView({ canManage }: { canManage: boolean }) {
   const active = employees.filter(e => !e.leftAt || e.leftAt.slice(0, 7) >= month);
   return <section className="finance-page">
     <div className="section-head"><div><h3>Nóminas y personal</h3><p>{canManage ? 'Coste real de plantilla y su efecto en cuentas' : 'Totales de plantilla; el detalle nominativo está restringido'}</p></div>
-      {canManage && !DEMO && <><button className="secondary" onClick={() => setShowEmployee(true)}>＋ Empleado</button> <button className="primary" onClick={() => setShowSalary(true)}>＋ Nómina</button></>}</div>
+      {canManage && <><button className="secondary" onClick={() => setShowEmployee(true)}>＋ Empleado</button> <button className="primary" disabled={!employees.length} onClick={() => setShowSalary(true)}>＋ Nómina</button></>}</div>
     {error && <div className="toast" onClick={() => setError('')}>{error} ×</div>}
     {notice && <div className="order-notice" onClick={() => setNotice('')}>✓ {notice}</div>}
     <div className="finance-period"><label>Mes<input type="month" value={month} onChange={e => setMonth(e.target.value)} /></label><span>Las bajas posteriores al mes siguen apareciendo en el histórico</span></div>
@@ -58,9 +57,9 @@ export function SalariesView({ canManage }: { canManage: boolean }) {
       <div className="ledger-lines">{data?.lines?.map(s => <div key={s.id} className="salary-line">
         <strong>{s.employeeName}</strong><span>{s.status === 'draft' ? 'Borrador' : s.status === 'paid' ? 'Pagada' : s.status === 'void' ? 'Anulada' : 'Confirmada'}</span>
         <small>Bruto {euro(s.gross)}</small><small>Net {euro(s.net)}</small><small>Coste {euro(s.gross + s.socialSecurityCompany)}</small>
-        {!DEMO && s.status === 'draft' && <button className="secondary" onClick={() => void act(`/salaries/${s.id}/confirm`)}>Confirmar</button>}
-        {!DEMO && s.status === 'confirmed' && <button className="secondary" onClick={() => void act(`/salaries/${s.id}/pay`, { paidAt: new Date().toLocaleDateString('en-CA') })}>Marcar pagada</button>}
-        {!DEMO && ['confirmed', 'paid'].includes(s.status) && <button className="remove-button" onClick={() => { const reason = window.prompt('Motivo de la anulación'); if (reason) void act(`/salaries/${s.id}/void`, { reason }); }}>Anular</button>}
+        {s.status === 'draft' && <button className="secondary" onClick={() => void act(`/salaries/${s.id}/confirm`)}>Confirmar</button>}
+        {s.status === 'confirmed' && <button className="secondary" onClick={() => void act(`/salaries/${s.id}/pay`, { paidAt: new Date().toLocaleDateString('en-CA') })}>Marcar pagada</button>}
+        {['confirmed', 'paid'].includes(s.status) && <button className="remove-button" onClick={() => { const reason = window.prompt('Motivo de la anulación'); if (reason) void act(`/salaries/${s.id}/void`, { reason }); }}>Anular</button>}
       </div>)}{!data?.lines?.length && <p className="finance-note">Sin nóminas en este mes.</p>}</div>
     </section></div> : <p className="finance-note">Acceso restringido a totales. Los importes agregados son los que se contabilizan en cuentas.</p>}
 

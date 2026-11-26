@@ -14,7 +14,6 @@ export function LossesView({ canManage }: { canManage: boolean }) {
   const [data, setData] = useState<Result | null>(null), [error, setError] = useState(''), [notice, setNotice] = useState(''), [showInvitation, setShowInvitation] = useState(false);
 
   async function load() {
-    if (DEMO) { setData(null); return; }
     try { setData(await request<Result>(`/reports/losses?from=${from}&to=${to}`)); }
     catch (e) { setError((e as Error).message); }
   }
@@ -33,13 +32,13 @@ export function LossesView({ canManage }: { canManage: boolean }) {
   const max = Math.max(1, ...(data?.byReason.map(r => r.amount) ?? []));
   return <section className="finance-page">
     <div className="section-head"><div><h3>Pérdidas del negocio</h3><p>Mermas, roturas, invitaciones y descuadres valorados</p></div>
-      {canManage && !DEMO && <button className="primary" onClick={() => setShowInvitation(true)}>＋ Invitación</button>}</div>
+      {canManage && <button className="primary" onClick={() => setShowInvitation(true)}>＋ Invitación</button>}</div>
     {error && <div className="toast" onClick={() => setError('')}>{error} ×</div>}
     {notice && <div className="order-notice" onClick={() => setNotice('')}>✓ {notice}</div>}
     {data?.alert && <div className="loss-alert">⚠ Las pérdidas son el {data.percentOfSales} % de las ventas y superan el umbral del {data.thresholdPct} %.</div>}
     <div className="finance-period"><label>Desde<input type="date" value={from} onChange={e => setFrom(e.target.value)} /></label>
       <label>Hasta<input type="date" value={to} onChange={e => setTo(e.target.value)} /></label>
-      {canManage && !DEMO && <button className="secondary" onClick={() => { const value = window.prompt('Umbral de aviso (%)', String(data?.thresholdPct ?? 3)); if (value) void act('/loss/settings', { thresholdPct: Number(value) }); }}>Umbral {data?.thresholdPct ?? 3} %</button>}</div>
+      {canManage && <button className="secondary" onClick={() => { const value = window.prompt('Umbral de aviso (%)', String(data?.thresholdPct ?? 3)); if (value) void act('/loss/settings', { thresholdPct: Number(value) }); }}>Umbral {data?.thresholdPct ?? 3} %</button>}</div>
     {data && <>
       <div className="kpi-grid">
         <article><span>Pérdida total</span><strong>{euro(data.total)}</strong><small>{data.lines.length} movimientos</small></article>

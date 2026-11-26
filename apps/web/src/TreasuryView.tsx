@@ -11,7 +11,6 @@ export function TreasuryView({ canManage, cashierOnly }: { canManage: boolean; c
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [showAccount, setShowAccount] = useState(false), [showTransfer, setShowTransfer] = useState(false), [showCommitment, setShowCommitment] = useState(false);
 
   async function load() {
-    if (DEMO) { setData({ accounts: [], total: 0, commitments: [], committed: 0, availableReal: 0, evolution: [], cashClosure: null }); return; }
     try { setData(await request<Summary>(`/treasury/summary?days=${days}`)); }
     catch (e) { setError((e as Error).message); }
   }
@@ -39,7 +38,7 @@ export function TreasuryView({ canManage, cashierOnly }: { canManage: boolean; c
 
   return <section className="finance-page">
     <div className="section-head"><div><h3>Dinero disponible</h3><p>Saldos por cuenta, compromisos y evolución reciente</p></div>
-      {canManage && !DEMO && <><button className="secondary" onClick={() => void act('/treasury/commitments/sync', {}, 'Compromisos sincronizados.')}>Sincronizar</button> <button className="secondary" onClick={() => setShowCommitment(true)}>＋ Compromiso</button> <button className="secondary" onClick={() => setShowTransfer(true)}>⇄ Traspaso</button> <button className="primary" onClick={() => setShowAccount(true)}>＋ Cuenta</button></>}</div>
+      {canManage && <><button className="secondary" onClick={() => void act('/treasury/commitments/sync', {}, 'Compromisos sincronizados.')}>Sincronizar</button> <button className="secondary" onClick={() => setShowCommitment(true)}>＋ Compromiso</button> <button className="secondary" disabled={(data?.accounts.length ?? 0) < 2} onClick={() => setShowTransfer(true)}>⇄ Traspaso</button> <button className="primary" onClick={() => setShowAccount(true)}>＋ Cuenta</button></>}</div>
     {error && <div className="toast" onClick={() => setError('')}>{error} ×</div>}
     {notice && <div className="order-notice" onClick={() => setNotice('')}>✓ {notice}</div>}
     {cashierOnly && <p className="finance-note">Vista limitada a la cuenta de caja.</p>}
@@ -53,7 +52,7 @@ export function TreasuryView({ canManage, cashierOnly }: { canManage: boolean; c
       {data?.cashClosure && <p className="finance-note">Último cierre: esperado {euro(data.cashClosure.expectedCash)} · contado {euro(data.cashClosure.countedCash)} · diferencia {euro(data.cashClosure.cashDifference)}</p>}
     </section><section><div className="section-head"><div><h3>Próximos vencimientos</h3><p>Facturas y nóminas pendientes</p></div></div>
       <div className="ledger-lines">{data?.commitments.map(c => <div key={c.id} className="ledger-line"><span>{c.description}</span><small>{c.account} · {c.dueDate || 'sin fecha'}</small><b>{euro(c.amount)}</b>
-        {canManage && !DEMO && <button className="secondary" onClick={() => void act(`/treasury/commitments/${c.id}/pay`, {}, 'Compromiso marcado como pagado.')}>Pagado</button>}</div>)}{!data?.commitments.length && <p className="finance-note">Sin compromisos pendientes.</p>}</div>
+        {canManage && <button className="secondary" onClick={() => void act(`/treasury/commitments/${c.id}/pay`, {}, 'Compromiso marcado como pagado.')}>Pagado</button>}</div>)}{!data?.commitments.length && <p className="finance-note">Sin compromisos pendientes.</p>}</div>
     </section></div>
     <div className="section-head"><div><h3>Evolución</h3><p>Movimientos de los últimos {days} días</p></div><select value={days} onChange={e => setDays(Number(e.target.value))}><option value={30}>30 días</option><option value={90}>90 días</option></select></div>
     <div className="ledger-lines">{data?.evolution.map((e, i) => <div key={i} className="ledger-line"><span>{e.date}</span><small>{e.account}</small><small>+{euro(e.income ?? 0)}</small><b>−{euro(e.expense ?? 0)}</b></div>)}{!data?.evolution.length && <p className="finance-note">Sin movimientos en el periodo.</p>}</div>
