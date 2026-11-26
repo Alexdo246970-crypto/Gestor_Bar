@@ -1,15 +1,59 @@
-Necesitaras estar en la carpeta madre del proyecto, en nuestro caso es: 
+GUÍA DE ARRANQUE — barraOS
 
-    /Documentos/Proyecto Intermodular/Reto Bar
+Abre una terminal en la carpeta raíz del proyecto. Necesitas Node.js 20 o posterior y npm.
 
-Cuando estés ahí, deberas de abrir una terminal y poner el comando:
+MODO DEMO (sin API ni base de datos)
 
-    VITE_DEMO_MODE=true npm run dev --workspace @bar/web
+1. Instala las dependencias (solo hace falta la primera vez):
+   npm install
 
-En la terminal te apareceran varios enlaces http://..., le deberas de darle click al que ponga local:
+2. Inicia la web en modo demo:
+   VITE_DEMO_MODE=true npm run dev --workspace @bar/web
 
-Una vez hecho el click te abrira una página de google con el proyecto abierto, hay ya podrás navegar a gusto.
+3. Abre en el navegador la dirección local que indique Vite (normalmente
+   http://localhost:5173). En la pantalla de acceso, selecciona «Modo
+   administrador» y pulsa «Entrar como administrador (demo)».
 
-Debido a restricciones y problemas no se ha podido crear mas cuentas de restaurantes para poder acceder de forma como dueño de restaurantes, solo tienes acceso en modo administrador.
+La demo trae datos de ejemplo y guarda cambios en el navegador. Algunas
+operaciones se simulan; no se guardan en una base de datos. Para detenerla,
+pulsa Ctrl+C en la terminal.
 
-Esto sería todo, espero que te haya servido la guía de arranque.
+MODO COMPLETO (API, web y PostgreSQL)
+
+Necesitas también Docker Compose.
+
+1. Instala dependencias y prepara la configuración local:
+   npm install
+   cp .env.example .env
+
+2. Arranca PostgreSQL:
+   docker compose up -d db
+
+3. Carga las variables de entorno y aplica las migraciones:
+   set -a
+   source .env
+   set +a
+   npm run db:migrate
+
+4. En esa misma terminal inicia la API y la web:
+   npm run dev
+
+5. En otra terminal crea el primer local y administrador. Cambia los datos
+   de ejemplo y usa una contraseña de al menos 12 caracteres:
+   curl -X POST http://localhost:3000/api/setup \
+     -H 'Content-Type: application/json' \
+     -d '{"tenantName":"Mi bar","slug":"mi-bar","fullName":"Nombre Administrador","email":"admin@ejemplo.com","password":"CambiaEstaClave123!"}'
+
+Abre http://localhost:5173. Para entrar al local usa su identificador, el
+correo y la contraseña creados. La primera cuenta también puede entrar en
+«Modo administrador» para abrir el panel global.
+
+El endpoint /api/setup solo acepta el alta mientras no exista ningún usuario.
+La API está en http://localhost:3000/api y la documentación OpenAPI en
+http://localhost:3000/docs.
+
+Para parar PostgreSQL: docker compose down. Los datos se conservan en el
+volumen postgres_data. Para eliminarlos también: docker compose down -v.
+
+Consulta README.md para variables de configuración, comandos y descripción
+de las funcionalidades.

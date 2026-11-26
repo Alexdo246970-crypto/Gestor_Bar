@@ -1,45 +1,116 @@
-# Bar Manager SaaS
+# barraOS · Gestión para bares y restaurantes
 
-Base multi-tenant para gestión de bares y restaurantes. Incluye API REST NestJS, SPA React y PostgreSQL. El modelo usa claves foráneas compuestas por `tenant_id` y Row-Level Security (RLS) como defensa adicional.
+Aplicación web para gestionar el servicio de un bar o restaurante: mapa de mesas, TPV y comandas, cocina, carta, inventario, compras y herramientas financieras. Incluye una API REST con NestJS, una interfaz React y PostgreSQL con separación de datos por local.
 
-## Requisitos y arranque
+## Guía de arranque
 
-- Node.js 20+
-- Docker Compose (o PostgreSQL 16 local)
+Hay dos formas de abrir el proyecto: el modo demo permite explorar la interfaz sin configurar servicios; el modo completo ejecuta la API y PostgreSQL y conserva los datos en la base de datos.
+
+### Opción rápida: modo demo
+
+Requiere Node.js 20 o posterior y npm. Desde la carpeta raíz del proyecto:
 
 ```bash
-cp .env.example .env
-docker compose up -d db
 npm install
-npm run db:migrate
-npm run dev
+VITE_DEMO_MODE=true npm run dev --workspace @bar/web
 ```
 
-API: `http://localhost:3000/api`; documentación OpenAPI: `http://localhost:3000/api/docs`; web: `http://localhost:5173`.
+Abre la dirección local que muestra Vite, normalmente <http://localhost:5173>, y pulsa **Modo administrador** → **Entrar como administrador (demo)**. La demo incluye datos de ejemplo y guarda cambios en el almacenamiento local del navegador. No necesita PostgreSQL ni inicia la API; algunas acciones son simuladas.
 
-Modo demostración sin base de datos (datos en memoria del navegador): `VITE_DEMO_MODE=true npm run dev --workspace @bar/web` y pulsar «Entrar como administrador (demo)».
+Para detener el servidor, vuelve a la terminal y pulsa `Ctrl+C`.
 
-Crear el primer local y administrador mediante `POST /api/setup` (solo disponible mientras no exista ningún usuario; deshabilitar/eliminar este endpoint antes de exponer el servicio públicamente). El endpoint devuelve las credenciales iniciales una sola vez y exige una contraseña fuerte.
+### Arranque completo: API, web y PostgreSQL
 
-Las cuentas opcionales de cliente usan enlaces de acceso de un solo uso. Para enviarlos, configura `RESEND_API_KEY`, `EMAIL_FROM` y `PUBLIC_APP_URL` en el entorno de la API; las preferencias del cliente se muestran en cocina para avisar sobre alergias o ingredientes que quiere evitar. El cliente puede consultar el historial de los últimos 12 meses, descargar sus datos o borrar su cuenta.
+Requiere Node.js 20 o posterior, npm y Docker Compose. Desde la carpeta raíz:
 
-## Estructura
+1. Instala las dependencias y crea tu configuración local:
+
+   ```bash
+   npm install
+   cp .env.example .env
+   ```
+
+2. Inicia PostgreSQL:
+
+   ```bash
+   docker compose up -d db
+   ```
+
+3. Carga las variables de `.env` en la terminal y ejecuta las migraciones:
+
+   ```bash
+   set -a
+   source .env
+   set +a
+   npm run db:migrate
+   ```
+
+4. En esa misma terminal, inicia la API y la web:
+
+   ```bash
+   npm run dev
+   ```
+
+   Abre <http://localhost:5173>. La API está en <http://localhost:3000/api> y su documentación OpenAPI en <http://localhost:3000/docs>.
+
+5. Crea el primer local y la cuenta administradora. Con la API en marcha, ejecuta en otra terminal:
+
+   ```bash
+   curl -X POST http://localhost:3000/api/setup \
+     -H 'Content-Type: application/json' \
+     -d '{"tenantName":"Mi bar","slug":"mi-bar","fullName":"Nombre Administrador","email":"admin@ejemplo.com","password":"CambiaEstaClave123!"}'
+   ```
+
+   La contraseña debe tener al menos 12 caracteres. El bootstrap solo funciona mientras no haya usuarios en la base de datos. Después, entra en **Entrar en un local** con el identificador (`mi-bar`), el correo y la contraseña. La cuenta creada también tiene acceso al **Modo administrador** global.
+
+Para apagar PostgreSQL: `docker compose down`. Los datos se conservan en el volumen `postgres_data`; para borrarlos junto con el contenedor usa `docker compose down -v`.
+
+### Configuración
+
+`.env.example` contiene las variables de referencia:
+
+| Variable | Uso |
+|---|---|
+| `DATABASE_URL` | Conexión de la API a PostgreSQL. |
+| `PORT` | Puerto de la API (por defecto `3000`). |
+| `SESSION_SECRET` | Secreto de las sesiones; usa uno aleatorio y de al menos 32 caracteres en producción. |
+| `WEB_ORIGIN` | Origen permitido para la web (por defecto `http://localhost:5173`). |
+| `VITE_API_URL` | URL de la API consumida por la web. |
+| `RESEND_API_KEY`, `EMAIL_FROM`, `PUBLIC_APP_URL` | Envío de enlaces de acceso por correo a cuentas de cliente. Opcionales. |
+
+La API y Vite leen las variables del entorno del proceso. Por eso, en el arranque completo se cargan explícitamente con `source .env`; no subas el archivo `.env` al repositorio.
+
+## Funcionalidades
+
+- TPV, pedidos, personalización de platos, pagos parciales y mapa de mesas con salas, uniones y pedidos QR.
+- Gestión de equipo y perfiles de cocina, con permisos por rol.
+- Carta, recetas, inventario, auditoría de movimientos, lista de compra y facturas de proveedores.
+- Libro de cuentas, cierres de caja, finanzas, estado de resultados, nóminas, impuestos, tesorería y pérdidas.
+- Administración de varios locales desde una cuenta de plataforma.
+- Cuentas opcionales de cliente con enlaces de acceso, preferencias alimentarias y herramientas de privacidad.
+
+## Estructura del repositorio
 
 ```text
-apps/api/src/       API NestJS por módulos
-apps/web/src/       SPA React con TPV y administración inicial
-packages/contracts/ Tipos compartidos
-database/           Migración PostgreSQL, RLS e índices
+apps/api/                 API NestJS y migrador de base de datos
+apps/web/                 Aplicación React y modo demo
+packages/contracts/       Tipos compartidos
+database/migrations/      Migraciones SQL de PostgreSQL
+docs/architecture.md      Arquitectura, modelo de datos y referencia de API
 ```
 
-## Seguridad y límites del MVP
+## Comandos útiles
 
-- El login identifica el local por `slug`, email y contraseña. Las sesiones se guardan en PostgreSQL y se transportan en cookie `HttpOnly`, `Secure` en producción y `SameSite=Lax`.
-- El tenant se resuelve desde la sesión, nunca desde el cuerpo de una petición. La API establece `app.tenant_id` localmente en la transacción; las tablas tenant-scoped aplican RLS y FKs compuestas.
-- Roles: `admin`, `manager`, `waiter`, `cashier` y `kitchen`. Los permisos se aplican con guards de NestJS. Cocina solo accede a comandas y a los ajustes de su impresora; no ve precios, costes, márgenes ni datos de clientes.
-- El primer usuario creado en `/setup` también puede entrar en el panel global de administración. En instalaciones existentes, habilita una cuenta concreta con `UPDATE users SET platform_admin=true WHERE lower(email)=lower('admin@ejemplo.com');`. El acceso global requiere credenciales y no se concede por ser administrador de un local.
-- El pedido descuenta stock una única vez al cerrarse/pagarse; la transacción registra movimientos de inventario. Una anulación crea reversos, no borra movimientos.
-- La contabilidad es un informe operativo, no un sistema de presentación fiscal. Confirmar tipos, fechas y tratamiento del IVA con asesoría contable.
-- Para producción: TLS, secretos administrados, rate limiting, copias de seguridad, auditoría, política de retención, monitoreo y revisión de seguridad. Desactivar `/setup` una vez creado el primer administrador.
+```bash
+npm run dev       # API y web en modo desarrollo
+npm run build     # Compila contratos, API y web
+npm run db:migrate # Aplica las migraciones pendientes
+```
 
-Consulta `docs/architecture.md` para relaciones, flujos y endpoints.
+## Seguridad y alcance
+
+La sesión identifica el local y el rol del usuario; la API aplica controles de acceso y PostgreSQL añade aislamiento por local mediante RLS y claves foráneas compuestas. Las sesiones usan cookies `HttpOnly`. El endpoint `/api/setup` es exclusivamente para el primer arranque y deja de aceptar solicitudes tras crear el primer usuario.
+
+El informe fiscal es orientativo y debe revisarse con asesoría contable. Antes de exponer el servicio en producción, configura TLS, secretos adecuados, copias de seguridad, límites de solicitudes, monitorización y una política de retención de datos.
+
+Para más detalle técnico y endpoints, consulta [docs/architecture.md](docs/architecture.md).

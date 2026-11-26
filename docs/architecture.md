@@ -226,4 +226,4 @@ Cookie de sesión requerida en todos salvo el bootstrap y login. Roles: `admin` 
 
 ## Arranque
 
-En la raíz: `cp .env.example .env`, `docker compose up -d db`, `npm install`, `npm run db:migrate`, `npm run dev`. Después del bootstrap inicial, crear categorías, productos, ingredientes y recetas antes de operar el TPV.
+Consulta la [guía de arranque del README](../README.md#guía-de-arranque) para iniciar la demo o levantar la API, PostgreSQL y la web, incluido el alta inicial del local y administrador.
