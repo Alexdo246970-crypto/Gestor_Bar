@@ -1,0 +1,15 @@
+Necesitaras estar en la carpeta madre del proyecto, en nuestro caso es: 
+
+    /Documentos/Proyecto Intermodular/Reto Bar
+
+Cuando estés ahí, deberas de abrir una terminal y poner el comando:
+
+    VITE_DEMO_MODE=true npm run dev --workspace @bar/web
+
+En la terminal te apareceran varios enlaces http://..., le deberas de darle click al que ponga local:
+
+Una vez hecho el click te abrira una página de google con el proyecto abierto, hay ya podrás navegar a gusto.
+
+Debido a restricciones y problemas no se ha podido crear mas cuentas de restaurantes para poder acceder de forma como dueño de restaurantes, solo tienes acceso en modo administrador.
+
+Esto sería todo, espero que te haya servido la guía de arranque.
